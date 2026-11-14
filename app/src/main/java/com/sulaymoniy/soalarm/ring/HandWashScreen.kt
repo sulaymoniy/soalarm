@@ -181,16 +181,24 @@ fun HandWashScreen(onPassed: () -> Unit, onCameraFailed: (String) -> Unit, onCan
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "Wash your hands to stop the alarm",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Color.White,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier
+                Column(
+                    Modifier
                         .weight(1f)
                         .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
                         .padding(horizontal = 12.dp, vertical = 8.dp),
-                )
+                ) {
+                    Text(
+                        "Wash your hand with soap to stop the alarm",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color.White,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        "One hand is enough 🖐️",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.85f),
+                    )
+                }
                 Spacer(Modifier.width(12.dp))
                 FilledTonalIconButton(onClick = { useFrontCamera = !useFrontCamera }) {
                     Icon(painterResource(R.drawable.ic_switch_camera), contentDescription = "Switch camera")
@@ -260,8 +268,8 @@ private fun HintCard(state: WashState) {
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         val emoji = when (state.hint) {
-            WashHint.ShowBothHands -> "🙌"
-            WashHint.RubHands -> "👐"
+            WashHint.ShowHand -> "🖐️"
+            WashHint.RubHand -> "👋"
             WashHint.AddSoap -> "🧼"
             WashHint.KeepGoing -> "💧"
         }

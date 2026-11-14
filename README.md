@@ -1,10 +1,10 @@
 # SoAlarm ⏰💧
 
-An Android alarm clock that only stops when you **wash your hands with soap for 20 seconds**.
+An Android alarm clock that only stops when you **wash your hand with soap for 20 seconds**. One hand is enough, so you can hold the phone in the other.
 
 - Set alarms with a time, repeat days and an optional label.
 - When it rings, the alarm screen opens over the lock screen, and the song fades in from quiet to full volume over 60 seconds, with vibration.
-- No snooze and no dismiss button. Point the camera at your hands, rub them together with soap, and watch the ring fill up.
+- No snooze and no dismiss button. Point the camera at your hand, rub your fingers and palm with soap, and watch the ring fill up. Washing both hands together works too.
 - If the camera isn't available, you solve 3 quick math problems instead, so you're never stuck.
 - No sink nearby? After 3 minutes of ringing, a "Can't wash right now?" button lets you solve 5 harder problems instead.
 - Everything runs on your phone. No internet, no ads, no analytics. See [PRIVACY_POLICY.md](PRIVACY_POLICY.md).
@@ -60,7 +60,8 @@ All the numbers are in one file:
 | `WASH_SECONDS_REQUIRED` | Seconds of washing needed (20) |
 | `FOAM_SECONDS_REQUIRED` | Seconds of those that soap must be visible (5) |
 | `FOAM_PIXEL_THRESHOLD` | **Soap sensitivity.** Raise it if bare hands count as soapy; lower it if real foam isn't detected |
-| `RUB_SPEED_THRESHOLD` | How hard you need to rub |
+| `SINGLE_HAND_RUB_THRESHOLD` | **One hand:** how much your fingers must move against your palm. Lower it if washing isn't detected; raise it if a still hand counts |
+| `RUB_SPEED_THRESHOLD` | **Two hands:** how hard you need to rub them together |
 | `MANUAL_FALLBACK_AFTER_MS` | After the alarm has rung this long (3 min), a **"Can't wash right now? Solve math instead"** button appears |
 | `MANUAL_FALLBACK_PROBLEMS` | How many harder math problems that button asks for (5) |
 

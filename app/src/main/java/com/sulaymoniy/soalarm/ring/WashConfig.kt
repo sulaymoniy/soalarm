@@ -24,14 +24,31 @@ object WashConfig {
     /** ...and has at most this much colour saturation (0..1). Skin is usually above this. */
     const val FOAM_MAX_SATURATION = 0.20f
 
-    /** How fast hands must move against each other, in hand-lengths per second. */
+    /**
+     * ONE HAND: how fast the fingers must move relative to their own palm, in
+     * hand-lengths per second (averaged over the thumb and finger joints).
+     * Measured in the hand's own frame, so shaking or tilting the phone doesn't count.
+     * Lower it if real washing isn't detected; raise it if a still hand counts as washing.
+     */
+    const val SINGLE_HAND_RUB_THRESHOLD = 0.35f
+
+    /**
+     * Finger movement is compared with how the hand looked this long ago (not just the
+     * previous frame), so tiny detection jitter doesn't add up to fake motion.
+     */
+    const val FINGER_MOTION_WINDOW_MS = 250L
+
+    /** TWO HANDS (optional): how fast hands must slide against each other, in hand-lengths per second. */
     const val RUB_SPEED_THRESHOLD = 0.30f
 
-    /** Hands count as "together" when palm centres are closer than this many hand-lengths. */
+    /** Two hands count as "together" when palm centres are closer than this many hand-lengths. */
     const val HANDS_CLOSE_FACTOR = 1.8f
 
-    /** Rubbing hands often hide each other. Keep "both hands" for this long after losing one. */
-    const val HAND_LOSS_GRACE_MS = 900L
+    /** Smoothing of the rubbing signal, in seconds. Higher = steadier but slower to react. */
+    const val RUB_SMOOTHING_SECONDS = 0.4f
+
+    /** A hand not seen for this long is forgotten (progress is kept; it only pauses). */
+    const val HAND_TRACK_TIMEOUT_MS = 1_000L
 
     /** If the camera delivers no frames for this long, fall back to math problems. */
     const val CAMERA_NO_FRAMES_TIMEOUT_MS = 8_000L

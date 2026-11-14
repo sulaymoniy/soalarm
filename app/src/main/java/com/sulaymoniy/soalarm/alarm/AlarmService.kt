@@ -127,7 +127,7 @@ class AlarmService : Service() {
         return NotificationCompat.Builder(this, SoAlarmApp.CHANNEL_ALARM)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(label.ifBlank { "Wake up!" })
-            .setContentText("Wash your hands with soap to stop the alarm")
+            .setContentText("Wash your hand with soap to stop the alarm")
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)

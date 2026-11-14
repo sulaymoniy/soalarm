@@ -294,7 +294,7 @@ private fun EmptyState() {
         Spacer(Modifier.height(16.dp))
         Text("No alarms yet", style = MaterialTheme.typography.titleLarge)
         Text(
-            "Tap + to add one. To stop it in the morning, you'll wash your hands with soap for 20 seconds.",
+            "Tap + to add one. To stop it in the morning, you'll wash your hand with soap for 20 seconds. One hand is enough.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,

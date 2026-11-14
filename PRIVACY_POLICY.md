@@ -2,12 +2,12 @@
 
 _Last updated: November 14, 2026_
 
-SoAlarm is an alarm clock that asks you to wash your hands to turn the alarm off. We built it so that **nothing leaves your phone**.
+SoAlarm is an alarm clock that asks you to wash your hand to turn the alarm off. We built it so that **nothing leaves your phone**.
 
 ## What SoAlarm uses
 
 **Camera**
-- The camera is used **only while an alarm is ringing**, to check that both hands are visible, rubbing together, and soapy.
+- The camera is used **only while an alarm is ringing**, to check that you are washing your hand (one hand is enough) with soap.
 - Camera frames are processed **on your device only**, in memory, by an on-device hand-tracking model (Google MediaPipe Hand Landmarker).
 - Frames are **never stored, never recorded, and never sent** anywhere. Each frame is discarded as soon as it has been checked.
 - If you don't allow the camera, you can stop alarms by solving simple math problems instead.

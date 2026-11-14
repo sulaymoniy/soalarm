@@ -29,7 +29,7 @@ enum class Need(val title: String, val why: String) {
     ),
     Camera(
         "Camera",
-        "Used only while an alarm rings, to check you're washing your hands. Pictures never leave your phone.",
+        "Used only while an alarm rings, to check you're washing your hand with soap. Pictures never leave your phone.",
     ),
     Battery(
         "Battery: unrestricted",
