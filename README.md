@@ -16,7 +16,7 @@ That's the whole idea. I hope it works for you better than everything else worke
 
 # SoAlarm ⏰💧
 
-An Android alarm clock that only stops when you **wash your hand with soap for 20 seconds**. One hand is enough, so you can hold the phone in the other.
+An Android alarm clock that only stops when you **wash your hand with soap**: confirm the lather, then rub for 5 seconds. One hand is enough, so you can hold the phone in the other.
 
 - Set alarms with a time, repeat days and an optional label.
 - When it rings, the alarm screen opens over the lock screen, and the song fades in from quiet to full volume over 60 seconds, with vibration.
@@ -70,13 +70,13 @@ Works on Android 8.0 (API 26) through Android 17 (API 37).
 
 How it decides:
 
-1. **Soap is confirmed once.** When soap has been seen on your hand for 2 seconds in total, the hand counts as "soaped" for the rest of the alarm ("✅ Soap confirmed"). Thin bar-soap lather, thick foam and wet, shiny, soap-filmed skin all count. Only sharp frames are checked: blurry frames (rubbing, shaky phone) are skipped, not counted as "no soap". A soap bar held in your palm is ignored.
-2. **Then only rubbing fills the ring:** your fingers moving back and forth against your palm, 1–4 times per second.
+1. **Soap is confirmed once.** When soap has been seen on your hand for 2 seconds in total, the hand counts as "soaped" for the rest of the alarm ("✅ Soap confirmed"). Thin bar-soap lather, thick foam, slightly tinted lather (coloured liquid soap) and wet, shiny, soap-filmed skin all count. Only sharp frames are checked: blurry frames (rubbing, shaky phone) are skipped, not counted as "no soap". A soap bar of any colour (white, cream, green, orange…) held in your palm is cut out and never counts as soap.
+2. **Then only rubbing fills the ring for 5 seconds:** your fingers, thumb or palm moving back and forth against each other, about 0.7–5 times per second. Short gaps (under half a second) don't stop the count.
 
 **Test it without an alarm:** in the app, tap **⋮ → Test wash check**. The camera screen opens with a debug overlay:
 
 - **Blue** = your hand (only these pixels are checked; the background is ignored), **orange** = soap bar (cut out), **green** = soapy, **yellow** = bubble highlights
-- Live values with ✅/❌ for each condition: hand visible, skin colour learned, sharp or blurry, soap %, soap confirmed (x / 2 s), rubbing frequency and amplitude, seconds counted
+- Live values with ✅/❌ for each condition: hand visible, skin colour learned, sharp or blurry, soap %, soap confirmed (x / 2 s), rubbing frequency and amplitude, seconds counted, frames per second
 - **Save frame** saves the current camera picture and a copy with all values drawn on it to your phone's **Pictures/SoAlarm** folder, so you can share real examples for tuning
 
 All the numbers are in one file:
@@ -84,13 +84,15 @@ All the numbers are in one file:
 
 | Constant | What it does |
 |---|---|
-| `WASH_SECONDS_REQUIRED` | Seconds of rubbing (after soap is confirmed) needed (20) |
+| `WASH_SECONDS_REQUIRED` | Seconds of rubbing (after soap is confirmed) needed (5) |
 | `FOAM_COVERAGE_THRESHOLD` | **Soap sensitivity:** share of the hand that must be newly soapy (4%). Raise it if a dry hand passes; lower it if real lather isn't detected |
 | `FOAM_CONFIRM_SECONDS` | How long soap must be seen in total to be confirmed (2 s) |
 | `BUBBLE_MIN_CONTRAST`, `FOAM_MIN_BUBBLES` | How "bubbly" soap must look. Raise them if smooth white things count; lower them if lather is missed |
 | `SHARPNESS_RELATIVE` | How sharp a frame must be (vs. recent frames) to judge soap |
-| `SOAP_BAR_SATURATION_ABOVE_HAND` | How colourful a smooth area must be to be treated as a soap bar and ignored |
-| `RUB_MIN_HZ`, `RUB_MAX_HZ` | Rubbing rhythm: back-and-forth 1–4 times per second |
+| `SOAP_BAR_COLOR_DISTANCE`, `SOAP_BAR_MIN_SIZE` | How different in colour (and how big) a smooth, solid area must be to be treated as a soap bar and ignored |
+| `FOAM_MAX_SATURATION_TINTED` | How colourful tinted lather may be (only with strong bubble texture) |
+| `RUB_MIN_HZ`, `RUB_MAX_HZ` | Rubbing rhythm: back-and-forth 0.7–5 times per second |
+| `RUB_HOLD_MS` | Rubbing stays on this long after the last good reading (0.5 s) |
 | `RUB_MIN_AMPLITUDE` | How far your fingers must move against your palm. Lower it if real rubbing isn't detected |
 | `MANUAL_FALLBACK_AFTER_MS` | After the alarm has rung this long (3 min), a **"Can't wash right now? Solve math instead"** button appears |
 | `MANUAL_FALLBACK_PROBLEMS` | How many harder math problems that button asks for (5) |

@@ -16,6 +16,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.max
 
 /**
  * Test mode only, and only when the user taps "Save frame": saves the current camera
@@ -55,10 +56,10 @@ object FrameSaver {
             "Skin learned: ${f.skinReady}  V=${num(f.skinV)} S=${num(f.skinS)}",
             "Sharp: ${f.sharp}  sharpness=${num(f.sharpness)} ref=${num(f.sharpnessRef)} (needs >= ${WashConfig.SHARPNESS_RELATIVE} x ref)",
             "Soap bar cut out: ${pct(f.barShare)} of hand",
-            "Soap this frame: ${pct(f.coverage)} of hand (${f.maskPixels} px)",
+            "Soap this frame: ${pct(max(f.coverage, 0f))} of hand (${f.maskPixels} px)",
             "Soap smoothed: ${pct(d.foamCoverage)}  before: ${pct(d.foamBaseline)}  needs +${pct(WashConfig.FOAM_COVERAGE_THRESHOLD)}  -> ${d.foamNow}",
             "Soap confirmed: ${s.soaped}  (${String.format(Locale.US, "%.1f", d.foamSeconds)} / ${WashConfig.FOAM_CONFIRM_SECONDS} s)",
-            "Rubbing: ${d.rubbing}  ${String.format(Locale.US, "%.2f Hz, amp %.4f", d.rubHz, d.rubAmplitude)}",
+            "Rubbing: ${d.rubbing}  ${String.format(Locale.US, "%.2f Hz, amp %.4f, %.1f fps", d.rubHz, d.rubAmplitude, d.fps)}",
             "Washing: ${String.format(Locale.US, "%.1f", s.washSeconds)} / ${WashConfig.WASH_SECONDS_REQUIRED} s   hint: ${s.hint.text}",
             "Config: bubbleContrast=${WashConfig.BUBBLE_MIN_CONTRAST} grey>=${WashConfig.BUBBLE_MIN_GREY_NEIGHBOURS} " +
                 "falloff>=${WashConfig.BUBBLE_MIN_FALLOFF_DIRECTIONS}",

@@ -24,10 +24,10 @@ class HandWashTrackerTest {
         foam: (t: Double) -> Float,
         sharp: (frame: Int) -> Boolean = { true },
         tracker: HandWashTracker = HandWashTracker(),
+        fps: Int = 15,
         frame: (t: Double) -> List<List<Pt>>,
     ): WashState {
         var state = WashState()
-        val fps = 15
         for (i in 0 until (seconds * fps).toInt()) {
             val t = i / fps.toDouble()
             state = tracker.update((t * 1000).toLong(), frame(t), foam(t), skinReady = true, sharp = sharp(i))
@@ -100,8 +100,11 @@ class HandWashTrackerTest {
 
     @Test
     fun slowFidgetingIsNotRubbing() {
+        // With the loosened rhythm (2 reversals, 0.7 Hz) a short stretch of slow movement can
+        // briefly look like rubbing, but slow fidgeting must never come close to passing.
         val s = run(25.0, { soapy }) { t -> listOf(rubbing(t, hz = 0.3)) }
-        assertEquals(0f, s.washSeconds)
+        assertFalse(s.passed)
+        assertTrue("wash=${s.washSeconds}", s.washSeconds < 1f)
     }
 
     @Test
@@ -131,23 +134,85 @@ class HandWashTrackerTest {
 
     @Test
     fun briefDropPausesButDoesNotReset() {
-        val tracker = HandWashTracker()
+        val tracker = HandWashTracker(initiallySoaped = true)
         var state = WashState()
         val fps = 15
         var before = 0f
-        for (i in 0 until 14 * fps) {
+        for (i in 0 until 6 * fps) {
             val t = i / fps.toDouble()
             // Hand disappears for 0.6 s in the middle.
-            val gone = t in 8.0..8.6
+            val gone = t in 3.0..3.6
             state = tracker.update((t * 1000).toLong(), if (gone) emptyList() else listOf(rubbing(t)), soapy)
-            if (t < 8.0) before = state.washSeconds
-            if (gone && t > 8.05) {
+            if (t < 3.0) before = state.washSeconds
+            if (gone && t > 3.05) {
                 assertEquals(WashHint.ShowHand, state.hint)
                 assertEquals(before, state.washSeconds, 0.001f)
             }
         }
         assertTrue("progress kept: ${state.washSeconds} > $before", state.washSeconds > before)
-        assertTrue(state.washSeconds < WashConfig.WASH_SECONDS_REQUIRED)
+    }
+
+    // ---- Bug: rubbing stuck at 0 after the hand was lost ------------------------------
+
+    @Test
+    fun rubbingRestartsAfterHandIsLostForOverASecond() {
+        val tracker = HandWashTracker(initiallySoaped = true)
+        var state = WashState()
+        val fps = 15
+        var beforeLoss = 0f
+        for (i in 0 until 12 * fps) {
+            val t = i / fps.toDouble()
+            val hands = when {
+                t < 2.5 -> listOf(rubbing(t))
+                t < 3.7 -> emptyList() // gone for 1.2 s (longer than the track timeout)
+                // Comes back somewhere else in the picture, still rubbing.
+                else -> listOf(fakeHand(200f, 220f, curl = (0.5 + 0.35 * sin(2 * PI * 2.0 * t)).toFloat()))
+            }
+            state = tracker.update((t * 1000).toLong(), hands, dry)
+            if (t < 2.5) beforeLoss = state.washSeconds
+            if (t in 3.0..3.6) assertEquals(beforeLoss, state.washSeconds, 0.001f)
+        }
+        assertTrue("rubbing again: hz=${state.debug.rubHz} amp=${state.debug.rubAmplitude}", state.debug.rubAmplitude > 0f)
+        assertTrue("counting resumed: ${state.washSeconds} > $beforeLoss", state.washSeconds > beforeLoss)
+        assertTrue(state.passed)
+    }
+
+    @Test
+    fun handOrderSwappingEveryFrameDoesNotBreakRubbing() {
+        // Two hands far apart: the left one rubs, the right one is still. MediaPipe lists
+        // them in a different order every frame.
+        val s = run(15.0, { dry }, tracker = HandWashTracker(initiallySoaped = true)) { t ->
+            val left = fakeHand(150f, 300f, curl = (0.5 + 0.35 * sin(2 * PI * 2.0 * t)).toFloat())
+            val right = fakeHand(500f, 300f)
+            if (((t * 15).toInt() % 2) == 0) listOf(left, right) else listOf(right, left)
+        }
+        assertTrue(s.passed)
+    }
+
+    @Test
+    fun smallOneHandRubbingAtLowFrameRateCounts() {
+        // Small motion (phone in the other hand) on a slow phone: 6 frames per second.
+        val s = run(15.0, { soapy }, fps = 6) { t ->
+            listOf(fakeHand(320f, 300f, curl = (0.5 + 0.12 * sin(2 * PI * 1.5 * t)).toFloat()))
+        }
+        assertTrue("wash=${s.washSeconds} hz=${s.debug.rubHz} amp=${s.debug.rubAmplitude}", s.passed)
+    }
+
+    // ---- Bug: soap line stuck after confirmation ---------------------------------------
+
+    @Test
+    fun soapReadingStaysLiveAfterConfirmation() {
+        // 0.6 % "before", then 14 %: must show foamNow = true (14 > 0.6 + 4), and keep updating.
+        val tracker = HandWashTracker()
+        val s1 = run(8.0, { t -> if (t < 1.0) 0.006f else 0.14f }, tracker = tracker) { t -> listOf(rubbing(t)) }
+        assertTrue(s1.soaped)
+        assertTrue("foamNow with ${s1.debug.foamCoverage} vs ${s1.debug.foamBaseline}", s1.debug.foamNow)
+        assertEquals(0.14f, s1.debug.foamCoverage, 0.01f)
+        // Lather rinsed off: the reading follows, the confirmation stays.
+        val s2 = run(3.0, { dry }, tracker = tracker) { t -> listOf(rubbing(t)) }
+        assertTrue(s2.debug.foamCoverage < 0.02f)
+        assertFalse(s2.debug.foamNow)
+        assertTrue(s2.soaped)
     }
 
     // ---- Soap only has to be confirmed once -------------------------------------------

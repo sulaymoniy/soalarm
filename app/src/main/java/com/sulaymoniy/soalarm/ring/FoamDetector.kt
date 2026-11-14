@@ -1,11 +1,11 @@
 package com.sulaymoniy.soalarm.ring
 
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.sqrt
 
 /** Soap on the hand in one frame. */
 class FoamResult(
@@ -42,8 +42,8 @@ class FoamDebug(
 /**
  * Detects soap ON the hand, not white things around it.
  *
- * 1. Only pixels inside the [HandMask] are looked at. Strongly coloured, smooth areas
- *    (a soap bar held in the palm) are cut out too.
+ * 1. Only pixels inside the [HandMask] are looked at. A soap bar of any colour held in
+ *    the hand (solid, smooth, coloured differently from the hand) is cut out too.
  * 2. Blurry frames (rubbing, shaky phone) are flagged and skipped by the tracker, because
  *    blur wipes out small bubbles.
  * 3. The hand's own skin colour is learned during the first frames.
@@ -90,6 +90,9 @@ class FoamDetector {
         val h = (ry1 - ry0) / scale
         if (w < 8 || h < 8) return FoamResult(0f, skinReady, sharp = false)
 
+        val red = FloatArray(w * h)
+        val green = FloatArray(w * h)
+        val blue = FloatArray(w * h)
         val lum = FloatArray(w * h)
         val value = FloatArray(w * h)
         val sat = FloatArray(w * h)
@@ -114,6 +117,9 @@ class FoamDetector {
                 val hi = max(rf, max(gf, bf))
                 val lo = min(rf, min(gf, bf))
                 val i = gy * w + gx
+                red[i] = rf
+                green[i] = gf
+                blue[i] = bf
                 lum[i] = 0.299f * rf + 0.587f * gf + 0.114f * bf
                 value[i] = hi
                 sat[i] = if (hi <= 0f) 0f else (hi - lo) / hi
@@ -125,8 +131,8 @@ class FoamDetector {
         val handCount = handMask.count { it }
         if (handCount == 0) return FoamResult(0f, skinReady, sharp = false)
 
-        // ---- Cut out a soap bar held in the hand: much more colourful than the hand, and smooth.
-        val bar = soapBar(handMask, lum, sat, w, h)
+        // ---- Cut out a soap bar held in the hand (any colour): solid, smooth, differently coloured.
+        val bar = soapBar(handMask, handCount, red, green, blue, lum, w, h)
         val mask = BooleanArray(w * h) { handMask[it] && !bar[it] }
         val maskCount = mask.count { it }
         val barShare = 1f - maskCount / handCount.toFloat()
@@ -157,15 +163,20 @@ class FoamDetector {
         if (!skinReady || !sharp) return result(0f, null, null)
 
         // ---- Bubble highlights.
+        // Normal: white/grey bubbles. Tinted (pinkish/greenish liquid soap): a bit more colour
+        // is allowed, but only with strong bubble texture.
         val minV = max(WashConfig.FOAM_MIN_BRIGHTNESS, skinV + WashConfig.FOAM_BRIGHTER_THAN_SKIN)
         val maxS = min(WashConfig.FOAM_MAX_SATURATION, skinS * WashConfig.FOAM_SATURATION_VS_SKIN)
-        val greyS = min(1f, maxS * 1.5f)
-        val c = WashConfig.BUBBLE_MIN_CONTRAST
+        val maxTintedS = max(maxS, WashConfig.FOAM_MAX_SATURATION_TINTED)
         val bubbles = BooleanArray(w * h)
         for (y in 2 until h - 2) {
             for (x in 2 until w - 2) {
                 val i = y * w + x
-                if (!mask[i] || value[i] < minV || sat[i] > maxS) continue
+                if (!mask[i] || value[i] < minV || sat[i] > maxTintedS) continue
+                val tinted = sat[i] > maxS
+                val greyS = min(1f, (if (tinted) maxTintedS else maxS) * 1.5f)
+                val minContrast = if (tinted) WashConfig.BUBBLE_STRONG_CONTRAST else WashConfig.BUBBLE_MIN_CONTRAST
+                val minFalloff = if (tinted) WashConfig.BUBBLE_STRONG_FALLOFF else WashConfig.BUBBLE_MIN_FALLOFF_DIRECTIONS
                 val l = lum[i]
                 // Brighter than all 8 neighbours, with real contrast, mostly grey around it.
                 var sum = 0f
@@ -178,14 +189,14 @@ class FoamDetector {
                     if (sat[j] <= greyS) grey++
                     sum += lum[j]
                 }
-                if (!isMax || grey < WashConfig.BUBBLE_MIN_GREY_NEIGHBOURS || l - sum / 8f < c) continue
+                if (!isMax || grey < WashConfig.BUBBLE_MIN_GREY_NEIGHBOURS || l - sum / 8f < minContrast) continue
                 // A small spot: 2 px away it is darker in (almost) every direction.
                 var falloff = 0
                 for (dy in -2..2 step 2) for (dx in -2..2 step 2) {
                     if (dx == 0 && dy == 0) continue
-                    if (l - lum[i + dy * w + dx] >= c) falloff++
+                    if (l - lum[i + dy * w + dx] >= WashConfig.BUBBLE_MIN_CONTRAST) falloff++
                 }
-                if (falloff >= WashConfig.BUBBLE_MIN_FALLOFF_DIRECTIONS) bubbles[i] = true
+                if (falloff >= minFalloff) bubbles[i] = true
             }
         }
 
@@ -220,54 +231,100 @@ class FoamDetector {
         return result(foamCount / maskCount.toFloat(), foam, bubbles)
     }
 
-    /** Strongly coloured (vs. the hand's median), smooth pixels inside the hand, grown a little. */
-    private fun soapBar(handMask: BooleanArray, lum: FloatArray, sat: FloatArray, w: Int, h: Int): BooleanArray {
-        val hist = IntArray(BINS)
-        for (i in handMask.indices) if (handMask[i]) hist[(sat[i] * (BINS - 1)).toInt()]++
-        val minSat = median(hist) + WashConfig.SOAP_BAR_SATURATION_ABOVE_HAND
+    /**
+     * A soap bar of ANY colour held in the hand: pixels that differ in colour from the hand's
+     * typical colour AND are far from any texture (a bar's inside is perfectly smooth; lather,
+     * skin creases and bubbles are not), forming a solid area of real size. The cut-out is
+     * grown back over the bar's outline.
+     */
+    private fun soapBar(
+        handMask: BooleanArray,
+        handCount: Int,
+        red: FloatArray,
+        green: FloatArray,
+        blue: FloatArray,
+        lum: FloatArray,
+        w: Int,
+        h: Int,
+    ): BooleanArray {
+        // The hand's typical colour (per-channel median: the bar is the minority).
+        val rh = IntArray(BINS)
+        val gh = IntArray(BINS)
+        val bh = IntArray(BINS)
+        for (i in handMask.indices) {
+            if (!handMask[i]) continue
+            rh[(red[i] * (BINS - 1)).toInt()]++
+            gh[(green[i] * (BINS - 1)).toInt()]++
+            bh[(blue[i] * (BINS - 1)).toInt()]++
+        }
+        val mr = median(rh)
+        val mg = median(gh)
+        val mb = median(bh)
 
-        // Local brightness spread in 5x5 patches via integral images of L and L².
-        val s1 = DoubleArray((w + 1) * (h + 1))
-        val s2 = DoubleArray((w + 1) * (h + 1))
-        for (y in 0 until h) {
-            var a = 0.0
-            var b = 0.0
-            for (x in 0 until w) {
-                val l = lum[y * w + x].toDouble()
-                a += l
-                b += l * l
-                s1[(y + 1) * (w + 1) + x + 1] = s1[y * (w + 1) + x + 1] + a
-                s2[(y + 1) * (w + 1) + x + 1] = s2[y * (w + 1) + x + 1] + b
-            }
+        // Texture: anything that stands out from its 8 neighbours (bubbles, edges, creases).
+        val texture = BooleanArray(w * h)
+        for (y in 1 until h - 1) for (x in 1 until w - 1) {
+            val i = y * w + x
+            var sum = 0f
+            for (dy in -1..1) for (dx in -1..1) if (dx != 0 || dy != 0) sum += lum[i + dy * w + dx]
+            if (abs(lum[i] - sum / 8f) >= WashConfig.BUBBLE_MIN_CONTRAST) texture[i] = true
         }
+        val nearTexture = dilate(texture, w, h, WashConfig.SOAP_BAR_TEXTURE_CLEARANCE)
+
+        val candidate = BooleanArray(w * h) { i ->
+            handMask[i] && !nearTexture[i] &&
+                max(abs(red[i] - mr), max(abs(green[i] - mg), abs(blue[i] - mb))) >= WashConfig.SOAP_BAR_COLOR_DISTANCE
+        }
+
+        // Keep only solid areas of real size (4-connected components).
+        val minSize = max(1, (WashConfig.SOAP_BAR_MIN_SIZE * handCount).toInt())
         val core = BooleanArray(w * h)
+        val seen = BooleanArray(w * h)
+        val queue = IntArray(w * h)
+        for (start in candidate.indices) {
+            if (!candidate[start] || seen[start]) continue
+            var head = 0
+            var tail = 0
+            queue[tail++] = start
+            seen[start] = true
+            while (head < tail) {
+                val i = queue[head++]
+                val x = i % w
+                val y = i / w
+                if (x > 0 && candidate[i - 1] && !seen[i - 1]) { seen[i - 1] = true; queue[tail++] = i - 1 }
+                if (x < w - 1 && candidate[i + 1] && !seen[i + 1]) { seen[i + 1] = true; queue[tail++] = i + 1 }
+                if (y > 0 && candidate[i - w] && !seen[i - w]) { seen[i - w] = true; queue[tail++] = i - w }
+                if (y < h - 1 && candidate[i + w] && !seen[i + w]) { seen[i + w] = true; queue[tail++] = i + w }
+            }
+            // The queue holds exactly this component's pixels.
+            if (tail >= minSize) for (k in 0 until tail) core[queue[k]] = true
+        }
+        // Grow back over the outline (the part skipped near the bar's edges) plus a margin.
+        return dilate(core, w, h, WashConfig.SOAP_BAR_TEXTURE_CLEARANCE + WashConfig.SOAP_BAR_GROW)
+    }
+
+    /** Square dilation by [r] grid pixels using an integral image. */
+    private fun dilate(src: BooleanArray, w: Int, h: Int, r: Int): BooleanArray {
+        val integral = IntArray((w + 1) * (h + 1))
         for (y in 0 until h) {
-            val ya = max(0, y - 2)
-            val yb = min(h, y + 3)
+            var rowSum = 0
             for (x in 0 until w) {
-                val i = y * w + x
-                if (!handMask[i] || sat[i] < minSat) continue
-                val xa = max(0, x - 2)
-                val xb = min(w, x + 3)
-                val n = ((yb - ya) * (xb - xa)).toDouble()
-                fun box(s: DoubleArray) = s[yb * (w + 1) + xb] - s[ya * (w + 1) + xb] - s[yb * (w + 1) + xa] + s[ya * (w + 1) + xa]
-                val mean = box(s1) / n
-                val std = sqrt(max(0.0, box(s2) / n - mean * mean))
-                if (std <= WashConfig.SOAP_BAR_MAX_TEXTURE) core[i] = true
+                if (src[y * w + x]) rowSum++
+                integral[(y + 1) * (w + 1) + x + 1] = integral[y * (w + 1) + x + 1] + rowSum
             }
         }
-        // Grow the cut-out so the bar's outline isn't checked for bubbles either.
-        val g = WashConfig.SOAP_BAR_GROW
-        val bar = BooleanArray(w * h)
-        for (y in 0 until h) for (x in 0 until w) {
-            if (!core[y * w + x]) continue
-            for (dy in -g..g) for (dx in -g..g) {
-                val xx = x + dx
-                val yy = y + dy
-                if (xx in 0 until w && yy in 0 until h) bar[yy * w + xx] = true
+        val out = BooleanArray(w * h)
+        for (y in 0 until h) {
+            val ya = max(0, y - r)
+            val yb = min(h, y + r + 1)
+            for (x in 0 until w) {
+                val xa = max(0, x - r)
+                val xb = min(w, x + r + 1)
+                out[y * w + x] = integral[yb * (w + 1) + xb] - integral[ya * (w + 1) + xb] -
+                    integral[yb * (w + 1) + xa] + integral[ya * (w + 1) + xa] > 0
             }
         }
-        return bar
+        return out
     }
 
     private fun laplacianVariance(mask: BooleanArray, lum: FloatArray, w: Int, h: Int): Float {

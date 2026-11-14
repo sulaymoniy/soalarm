@@ -369,7 +369,8 @@ private fun DebugValues(state: WashState) {
             String.format(Locale.US, "%.1f / %.0f s", d.foamSeconds, WashConfig.FOAM_CONFIRM_SECONDS),
         "${mark(d.rubbing)} Rubbing " + String.format(Locale.US, "%.1f Hz, amp %.3f", d.rubHz, d.rubAmplitude) +
             "  (needs ${WashConfig.RUB_MIN_HZ}–${WashConfig.RUB_MAX_HZ} Hz, ≥${WashConfig.RUB_MIN_AMPLITUDE})",
-        "${mark(state.washingNow)} Counting: " + String.format(Locale.US, "%.1f / %.0f s", state.washSeconds, WashConfig.WASH_SECONDS_REQUIRED),
+        "${mark(state.washingNow)} Counting: " + String.format(Locale.US, "%.1f / %.0f s", state.washSeconds, WashConfig.WASH_SECONDS_REQUIRED) +
+            String.format(Locale.US, "   (%.0f fps)", d.fps),
     )
     Column(
         Modifier

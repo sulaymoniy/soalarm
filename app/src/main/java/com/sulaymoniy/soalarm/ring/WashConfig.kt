@@ -10,8 +10,8 @@ package com.sulaymoniy.soalarm.ring
  * The rule: the ring only fills while a SOAPY hand is being RUBBED, both at once.
  */
 object WashConfig {
-    /** Seconds of "soapy hand + rubbing" needed to stop the alarm. */
-    const val WASH_SECONDS_REQUIRED = 20f
+    /** Seconds of rubbing (after soap is confirmed) needed to stop the alarm. */
+    const val WASH_SECONDS_REQUIRED = 5f
 
     // ---------------------------------------------------------------------------------
     // Hand mask: foam is only measured on the hand itself, never on the background.
@@ -27,17 +27,27 @@ object WashConfig {
     const val FOAM_GRID_MAX_SIZE = 480
 
     // ---------------------------------------------------------------------------------
-    // Soap bar in the hand: strongly coloured, smooth areas (e.g. an orange bar held in
-    // the palm) are cut out of the mask, for both the skin sample and the foam check.
+    // Soap bar in the hand, ANY colour (orange, green, blue, pink, white, cream): a solid,
+    // smooth area whose colour differs from the hand is cut out of the mask, for both the
+    // skin sample and the soap check. Lather is never cut out because it is full of texture.
     // ---------------------------------------------------------------------------------
 
-    /** A pixel is "soap bar" if it's this much more colourful than the hand's typical pixel... */
-    const val SOAP_BAR_SATURATION_ABOVE_HAND = 0.20f
+    /**
+     * How different (0..1, biggest R/G/B difference) from the hand's typical colour an area
+     * must be to be a soap bar candidate. A white bar on skin is ~0.5, an orange one ~0.3.
+     */
+    const val SOAP_BAR_COLOR_DISTANCE = 0.20f
 
-    /** ...and smooth: brightness varies less than this (std. dev., 0..1) in a 5x5 patch. */
-    const val SOAP_BAR_MAX_TEXTURE = 0.03f
+    /**
+     * Bar candidates must be at least this many grid pixels away from any texture
+     * (bubbles, edges, wrinkles). A bar's inside is perfectly smooth; lather never is.
+     */
+    const val SOAP_BAR_TEXTURE_CLEARANCE = 4
 
-    /** The cut-out grows by this many grid pixels, so the bar's outline isn't checked either. */
+    /** A smooth, differently coloured area must cover at least this share of the hand to be a bar. */
+    const val SOAP_BAR_MIN_SIZE = 0.02f
+
+    /** The cut-out grows by this many grid pixels beyond the clearance, so the bar's outline isn't checked. */
     const val SOAP_BAR_GROW = 2
 
     // ---------------------------------------------------------------------------------
@@ -81,6 +91,15 @@ object WashConfig {
 
     /** ...and at most this colourful (0..1)... */
     const val FOAM_MAX_SATURATION = 0.25f
+
+    /**
+     * Tinted lather (pinkish, greenish liquid soap) may be this colourful (0..1), but only
+     * when its bubble texture is strong: contrast of at least [BUBBLE_STRONG_CONTRAST] and
+     * falling off in at least [BUBBLE_STRONG_FALLOFF] of 8 directions.
+     */
+    const val FOAM_MAX_SATURATION_TINTED = 0.35f
+    const val BUBBLE_STRONG_CONTRAST = 0.06f
+    const val BUBBLE_STRONG_FALLOFF = 7
 
     /** ...and at most this fraction of the skin's own saturation. */
     const val FOAM_SATURATION_VS_SKIN = 0.65f
@@ -144,19 +163,25 @@ object WashConfig {
     // ---------------------------------------------------------------------------------
 
     /** Rubbing is judged over this much recent time (the motion must be sustained). */
-    const val RUB_WINDOW_MS = 1_500L
+    const val RUB_WINDOW_MS = 2_000L
+
+    /** At least this many analysed frames inside the window (slow phones manage ~5 per second). */
+    const val RUB_MIN_SAMPLES = 5
 
     /** Back-and-forth must be at least this fast (cycles per second)... */
-    const val RUB_MIN_HZ = 1.0f
+    const val RUB_MIN_HZ = 0.7f
 
     /** ...and at most this fast (faster is detection jitter, not washing). */
-    const val RUB_MAX_HZ = 4.0f
+    const val RUB_MAX_HZ = 5.0f
+
+    /** Rubbing stays "on" this long after the last valid reading, so short gaps don't stop the count. */
+    const val RUB_HOLD_MS = 500L
 
     /** How far fingers must move back and forth (standard deviation, in hand-lengths). */
     const val RUB_MIN_AMPLITUDE = 0.03f
 
     /** At least this many direction changes inside the window. */
-    const val RUB_MIN_REVERSALS = 3
+    const val RUB_MIN_REVERSALS = 2
 
     /** Two hands count as "together" when palm centres are closer than this many hand-lengths. */
     const val HANDS_CLOSE_FACTOR = 1.8f

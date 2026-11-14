@@ -33,6 +33,8 @@ data class WashDebug(
     val rubbing: Boolean = false,
     val rubHz: Float = 0f,
     val rubAmplitude: Float = 0f,
+    /** Frames analysed per second (rubbing needs a few per back-and-forth). */
+    val fps: Float = 0f,
 )
 
 data class WashState(
@@ -54,37 +56,47 @@ data class WashState(
  * 1. SOAP must be CONFIRMED once: soap (see [FoamDetector]) seen on sharp frames for
  *    [WashConfig.FOAM_CONFIRM_SECONDS] in total, measured against the hand's own lowest
  *    reading. Blurry frames are skipped, not counted as "no soap". After that the hand is
- *    "soaped" for the rest of the alarm.
- * 2. Then only RUBBING fills the ring: a sustained back-and-forth of the fingers relative
- *    to the palm at 1-4 times per second. Positions are measured in the hand's own frame
- *    (centred on the palm, rotated and scaled with it), so waving the whole hand, moving
- *    or shaking the phone, or holding an object still doesn't count.
+ *    "soaped" for the rest of the alarm. (The soap reading keeps updating for the test view.)
+ * 2. Then only RUBBING fills the ring: a back-and-forth of the hand's parts against each
+ *    other (fingers vs. palm, thumb vs. fingers) at 0.7-5 times per second. Positions are
+ *    measured in the hand's own frame (centred on the palm, rotated and scaled with it), so
+ *    waving the whole hand, moving or shaking the phone, or holding an object still doesn't
+ *    count. A short gap keeps counting for [WashConfig.RUB_HOLD_MS].
  *
- * One hand is enough. Two hands sliding against each other also count. If the hand is
- * briefly lost, progress pauses and continues later; it never resets.
+ * One hand is enough. Two hands sliding against each other also count. Hands are followed
+ * by position, so MediaPipe changing the order of the hands doesn't matter. A hand that is
+ * gone for [WashConfig.HAND_TRACK_TIMEOUT_MS] is forgotten and starts fresh when it comes
+ * back. Progress pauses while no hand is visible; it never resets.
  *
  * Pure Kotlin (no Android types), so it can be unit tested.
  */
 class HandWashTracker(initiallySoaped: Boolean = false) {
     private var lastTs = -1L
     private var frames = 0L
+    private var fps = 0f
 
     private val tracks = mutableListOf<Track>()
     private val pairRhythm = Rhythm()
     private var pairSeen = -1L
     private var prevPair: Pair<Palm, Palm>? = null
+    private var lastRubOkTs = -1L
+    private var lastHandTs = -1L
 
     private var foamSmoothed = -1f
     private var lastFoamTs = -1L
     private var foamBaselineMin = Float.MAX_VALUE
+    private var foamNow = false
     private var foamSeconds = 0f
     private var soaped = initiallySoaped
 
     private var washSeconds = 0f
 
+    /** Soap has been confirmed (also true if confirmed earlier in this alarm). */
+    val isSoaped: Boolean get() = soaped
+
     /**
      * [sharp] = false means the frame is too blurry to judge soap: the soap check skips it
-     * (rubbing is still measured).
+     * (rubbing is still measured). [foamCoverage] < 0 means "not measured this frame".
      */
     fun update(
         timestampMs: Long,
@@ -95,15 +107,20 @@ class HandWashTracker(initiallySoaped: Boolean = false) {
     ): WashState {
         frames++
         val dt = if (lastTs < 0) 0f else ((timestampMs - lastTs) / 1000f).coerceIn(0f, 0.5f)
+        if (dt > 0f) fps = if (fps == 0f) 1f / dt else fps + (1f / dt - fps) * 0.1f
         lastTs = timestampMs
 
         val palms = hands.filter { it.size >= 21 }.map { Palm.of(it) }
         val visible = palms.isNotEmpty()
 
+        // A hand that has been gone long enough starts completely fresh.
+        if (visible) {
+            if (lastHandTs >= 0 && timestampMs - lastHandTs > WashConfig.HAND_TRACK_TIMEOUT_MS) resetHands()
+            lastHandTs = timestampMs
+        }
+
         // ---- Soap: only on sharp frames; smoothed; compared with the lowest level ("before").
-        var foamNow = false
-        val baseline = min(foamBaselineMin, WashConfig.FOAM_BASELINE_CAP)
-        if (visible && skinReady && sharp && !soaped) {
+        if (visible && skinReady && sharp && foamCoverage >= 0f) {
             val fdt = if (lastFoamTs < 0) 0f else ((timestampMs - lastFoamTs) / 1000f).coerceIn(0f, 0.5f)
             lastFoamTs = timestampMs
             foamSmoothed = if (foamSmoothed < 0f) foamCoverage else {
@@ -111,20 +128,23 @@ class HandWashTracker(initiallySoaped: Boolean = false) {
                 foamSmoothed + (foamCoverage - foamSmoothed) * alpha
             }
             foamBaselineMin = min(foamBaselineMin, foamSmoothed)
-            foamNow = foamSmoothed - min(foamBaselineMin, WashConfig.FOAM_BASELINE_CAP) >= WashConfig.FOAM_COVERAGE_THRESHOLD
-            foamSeconds = if (foamNow) {
-                foamSeconds + fdt
-            } else {
-                max(0f, foamSeconds - fdt * WashConfig.FOAM_CONFIRM_LEAK_PER_SECOND)
+            foamNow = foamSmoothed - foamBaseline() >= WashConfig.FOAM_COVERAGE_THRESHOLD
+            if (!soaped) {
+                foamSeconds = if (foamNow) {
+                    foamSeconds + fdt
+                } else {
+                    max(0f, foamSeconds - fdt * WashConfig.FOAM_CONFIRM_LEAK_PER_SECOND)
+                }
+                if (foamSeconds >= WashConfig.FOAM_CONFIRM_SECONDS) soaped = true
             }
-            if (foamSeconds >= WashConfig.FOAM_CONFIRM_SECONDS) soaped = true
+        } else if (!visible) {
+            foamNow = false
         }
 
-        // ---- Rubbing: rhythmic finger motion (one hand) or hands sliding (two hands).
+        // ---- Rubbing: rhythmic motion of the hand's parts (one hand) or hands sliding (two).
         var best = RhythmResult.NONE
         for (palm in palms) {
-            val r = trackFor(timestampMs, palm).rhythm.add(timestampMs, palm.fingerSignals())
-            best = RhythmResult.better(best, r)
+            best = RhythmResult.better(best, trackFor(timestampMs, palm).rhythm.add(timestampMs, palm.signals()))
         }
         tracks.removeAll { timestampMs - it.lastSeen > WashConfig.HAND_TRACK_TIMEOUT_MS }
         if (palms.size >= 2) {
@@ -134,7 +154,9 @@ class HandWashTracker(initiallySoaped: Boolean = false) {
             prevPair = null
             if (pairSeen >= 0 && timestampMs - pairSeen > WashConfig.HAND_TRACK_TIMEOUT_MS) pairRhythm.clear()
         }
-        val rubbing = visible && best.ok
+        if (visible && best.ok) lastRubOkTs = timestampMs
+        // Short gaps between valid readings don't stop the count.
+        val rubbing = visible && lastRubOkTs >= 0 && timestampMs - lastRubOkTs <= WashConfig.RUB_HOLD_MS
 
         // The ring only fills once soap is confirmed, and only while rubbing.
         val washingNow = visible && soaped && rubbing
@@ -159,14 +181,24 @@ class HandWashTracker(initiallySoaped: Boolean = false) {
                 skinReady = skinReady,
                 sharp = sharp,
                 foamCoverage = max(foamSmoothed, 0f),
-                foamBaseline = if (foamBaselineMin == Float.MAX_VALUE) 0f else baseline,
+                foamBaseline = if (foamBaselineMin == Float.MAX_VALUE) 0f else foamBaseline(),
                 foamNow = foamNow,
                 foamSeconds = if (soaped) WashConfig.FOAM_CONFIRM_SECONDS else foamSeconds,
                 rubbing = rubbing,
                 rubHz = best.hz,
                 rubAmplitude = best.amplitude,
+                fps = fps,
             ),
         )
+    }
+
+    private fun foamBaseline() = min(foamBaselineMin, WashConfig.FOAM_BASELINE_CAP)
+
+    private fun resetHands() {
+        tracks.clear()
+        pairRhythm.clear()
+        prevPair = null
+        pairSeen = -1L
     }
 
     // ---- Following hands across frames -----------------------------------------------
@@ -175,10 +207,11 @@ class HandWashTracker(initiallySoaped: Boolean = false) {
         val rhythm = Rhythm()
     }
 
+    /** The same hand as before = the nearest recent track; otherwise a fresh one. */
     private fun trackFor(ts: Long, palm: Palm): Track {
         val track = tracks
-            .filter { it.lastSeen != ts && hypot(it.center.x - palm.center.x, it.center.y - palm.center.y) < 2f * palm.size }
-            .minByOrNull { hypot(it.center.x - palm.center.x, it.center.y - palm.center.y) }
+            .filter { it.lastSeen != ts && dist(it.center, palm.center) < 2f * palm.size }
+            .minByOrNull { dist(it.center, palm.center) }
             ?: Track(palm.center, ts).also { tracks.add(it) }
         track.center = palm.center
         track.lastSeen = ts
@@ -221,7 +254,7 @@ class HandWashTracker(initiallySoaped: Boolean = false) {
 
     /**
      * Keeps [WashConfig.RUB_WINDOW_MS] of a few motion signals and checks whether any of
-     * them goes back and forth: enough amplitude, 1-4 cycles per second, several reversals.
+     * them goes back and forth: enough amplitude, the right speed, enough reversals.
      */
     private class Rhythm {
         private val times = ArrayDeque<Long>()
@@ -241,8 +274,8 @@ class HandWashTracker(initiallySoaped: Boolean = false) {
         }
 
         private fun analyze(): RhythmResult {
-            val span = (times.last() - times.first()) / 1000f
-            if (span < WashConfig.RUB_WINDOW_MS / 1000f * 0.8f || times.size < 8) return RhythmResult.NONE
+            if (times.size < WashConfig.RUB_MIN_SAMPLES) return RhythmResult.NONE
+            if (times.last() - times.first() < WashConfig.RUB_WINDOW_MS / 2) return RhythmResult.NONE
             var best = RhythmResult.NONE
             for (c in values.first().indices) {
                 var mean = 0f
@@ -255,13 +288,24 @@ class HandWashTracker(initiallySoaped: Boolean = false) {
                 val band = max(0.35f * std, WashConfig.RUB_MIN_AMPLITUDE * 0.5f)
                 var side = 0
                 var reversals = 0
-                for (v in values) {
+                var firstRev = -1L
+                var lastRev = -1L
+                for ((k, v) in values.withIndex()) {
                     val d = v[c] - mean
                     val now = if (d > band) 1 else if (d < -band) -1 else side
-                    if (now != side && side != 0) reversals++
+                    if (now != side && side != 0) {
+                        reversals++
+                        if (firstRev < 0) firstRev = times[k]
+                        lastRev = times[k]
+                    }
                     side = now
                 }
-                val hz = reversals / 2f / span
+                // Frequency from the time between reversals (two reversals = one cycle).
+                val hz = if (reversals >= 2 && lastRev > firstRev) {
+                    (reversals - 1) / 2f / ((lastRev - firstRev) / 1000f)
+                } else {
+                    0f
+                }
                 val ok = std >= WashConfig.RUB_MIN_AMPLITUDE &&
                     reversals >= WashConfig.RUB_MIN_REVERSALS &&
                     hz >= WashConfig.RUB_MIN_HZ && hz <= WashConfig.RUB_MAX_HZ
@@ -275,11 +319,12 @@ class HandWashTracker(initiallySoaped: Boolean = false) {
 
     private class Palm(val center: Pt, val size: Float, val angle: Float, private val lm: List<Pt>) {
         /**
-         * Finger positions in the hand's own frame (centred on the palm, rotated with it,
-         * in hand-lengths): thumb x/y, fingers x/y, and how far the fingers reach out.
-         * Whole-hand movement, tilting and zooming leave these unchanged.
+         * Motion signals in the hand's own frame (centred on the palm, rotated with it, in
+         * hand-lengths). Whole-hand movement, tilting and zooming leave all of them unchanged:
+         * thumb x/y, fingers x/y, finger reach, thumb vs. fingers x/y, and fingertips vs.
+         * their own knuckles (curl), so palm, thumb and finger rubbing all show up.
          */
-        fun fingerSignals(): FloatArray {
+        fun signals(): FloatArray {
             val c = cos(-angle)
             val s = sin(-angle)
             fun local(i: Int): Pt {
@@ -289,12 +334,14 @@ class HandWashTracker(initiallySoaped: Boolean = false) {
             }
             var tx = 0f; var ty = 0f
             for (i in THUMB) { val p = local(i); tx += p.x; ty += p.y }
+            tx /= THUMB.size; ty /= THUMB.size
             var fx = 0f; var fy = 0f; var reach = 0f
             for (i in FINGERS) { val p = local(i); fx += p.x; fy += p.y; reach += hypot(p.x, p.y) }
-            return floatArrayOf(
-                tx / THUMB.size, ty / THUMB.size,
-                fx / FINGERS.size, fy / FINGERS.size, reach / FINGERS.size,
-            )
+            fx /= FINGERS.size; fy /= FINGERS.size; reach /= FINGERS.size
+            var curl = 0f
+            for (k in TIPS.indices) curl += dist(lm[TIPS[k]], lm[KNUCKLES[k]]) / size
+            curl /= TIPS.size
+            return floatArrayOf(tx, ty, fx, fy, reach, tx - fx, ty - fy, curl)
         }
 
         companion object {
@@ -302,6 +349,8 @@ class HandWashTracker(initiallySoaped: Boolean = false) {
             private val PALM_POINTS = intArrayOf(0, 5, 9, 13, 17)
             private val THUMB = intArrayOf(3, 4)
             private val FINGERS = intArrayOf(6, 8, 10, 12, 14, 16, 18, 20)
+            private val TIPS = intArrayOf(8, 12, 16, 20)
+            private val KNUCKLES = intArrayOf(5, 9, 13, 17)
 
             fun of(lm: List<Pt>): Palm {
                 val cx = PALM_POINTS.map { lm[it].x }.average().toFloat()

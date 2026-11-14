@@ -25,6 +25,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
+import com.sulaymoniy.soalarm.ring.WashConfig
 import com.sulaymoniy.soalarm.ring.WashTestActivity
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -320,7 +321,8 @@ private fun EmptyState() {
         Spacer(Modifier.height(16.dp))
         Text("No alarms yet", style = MaterialTheme.typography.titleLarge)
         Text(
-            "Tap + to add one. To stop it in the morning, you'll wash your hand with soap for 20 seconds. One hand is enough.",
+            "Tap + to add one. To stop it in the morning, you'll wash your hand with soap for " +
+                "${WashConfig.WASH_SECONDS_REQUIRED.toInt()} seconds. One hand is enough.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,

@@ -68,6 +68,8 @@ class FoamDetectorTest {
 
     private val whiteSoapBar: (IntArray, Random) -> Unit = { px, rnd -> rect(px, rnd, 280, 360, 230, 285, 242, 240, 236) }
     private val orangeSoapBar: (IntArray, Random) -> Unit = { px, rnd -> rect(px, rnd, 280, 360, 230, 285, 235, 120, 40) }
+    private val greenSoapBar: (IntArray, Random) -> Unit = { px, rnd -> rect(px, rnd, 280, 360, 230, 285, 60, 170, 80) }
+    private val creamSoapBar: (IntArray, Random) -> Unit = { px, rnd -> rect(px, rnd, 280, 360, 230, 285, 240, 228, 200) }
 
     /** Small bubbles: a bright centre with a light ring, ~3 px across. */
     private fun bubble(px: IntArray, x: Int, y: Int) {
@@ -89,6 +91,29 @@ class FoamDetectorTest {
                 val bx = x + rnd.nextInt(0, 3)
                 val by = y + rnd.nextInt(0, 3)
                 if (hypot(bx - palm.x, by - palm.y) < 56f) bubble(px, bx, by)
+                x += 8
+            }
+            y += 8
+        }
+    }
+
+    /** Tinted lather (pink liquid soap): pinkish film with pink-white bubbles. */
+    private val tintedLather: (IntArray, Random) -> Unit = { px, rnd ->
+        for (y in 0 until h) for (x in 0 until w) {
+            if (hypot(x - palm.x, y - palm.y) > 60f) continue
+            val n = rnd.nextInt(-4, 5)
+            px[y * w + x] = rgb(215 + n, 175 + n, 180 + n)
+        }
+        var y = (palm.y - 56).toInt()
+        while (y < palm.y + 56) {
+            var x = (palm.x - 56).toInt()
+            while (x < palm.x + 56) {
+                val bx = x + rnd.nextInt(0, 3)
+                val by = y + rnd.nextInt(0, 3)
+                if (hypot(bx - palm.x, by - palm.y) < 56f) {
+                    for (dy in -1..1) for (dx in -1..1) px[(by + dy) * w + bx + dx] = rgb(228, 168, 182)
+                    px[by * w + bx] = rgb(255, 185, 205)
+                }
                 x += 8
             }
             y += 8
@@ -150,6 +175,21 @@ class FoamDetectorTest {
     @Test
     fun dryHandHoldingWhiteSoapBarIsNotSoap() {
         val r = analyze(12, frame(3, whiteSink, whiteSoapBar))
+        assertTrue("white bar cut out: ${r.barShare}", r.barShare > 0.1f)
+        assertTrue("coverage=${r.coverage}", r.coverage < 0.01f)
+    }
+
+    @Test
+    fun dryHandHoldingGreenSoapBarIsNotSoap() {
+        val r = analyze(12, frame(12, whiteSink, greenSoapBar))
+        assertTrue("green bar cut out: ${r.barShare}", r.barShare > 0.1f)
+        assertTrue("coverage=${r.coverage}", r.coverage < 0.01f)
+    }
+
+    @Test
+    fun dryHandHoldingCreamSoapBarIsNotSoap() {
+        val r = analyze(12, frame(13, whiteSink, creamSoapBar))
+        assertTrue("cream bar cut out: ${r.barShare}", r.barShare > 0.1f)
         assertTrue("coverage=${r.coverage}", r.coverage < 0.01f)
     }
 
@@ -179,6 +219,13 @@ class FoamDetectorTest {
     fun thinBarSoapLatherIsSoap() {
         val r = analyze(12, frame(6, whiteSink, thinLather))
         assertTrue("sharp", r.sharp)
+        assertTrue("coverage=${r.coverage}", r.coverage > WashConfig.FOAM_COVERAGE_THRESHOLD + WashConfig.FOAM_BASELINE_CAP)
+    }
+
+    @Test
+    fun tintedLatherIsSoap() {
+        val r = analyze(12, frame(14, whiteSink, tintedLather))
+        assertTrue("lather is not mistaken for a bar: ${r.barShare}", r.barShare < 0.05f)
         assertTrue("coverage=${r.coverage}", r.coverage > WashConfig.FOAM_COVERAGE_THRESHOLD + WashConfig.FOAM_BASELINE_CAP)
     }
 

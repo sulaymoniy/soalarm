@@ -26,6 +26,7 @@ import com.sulaymoniy.soalarm.R
 import com.sulaymoniy.soalarm.SoAlarmApp
 import com.sulaymoniy.soalarm.data.AlarmDatabase
 import com.sulaymoniy.soalarm.ring.AlarmRingActivity
+import com.sulaymoniy.soalarm.ring.WashConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -127,7 +128,7 @@ class AlarmService : Service() {
         return NotificationCompat.Builder(this, SoAlarmApp.CHANNEL_ALARM)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(label.ifBlank { "Wake up!" })
-            .setContentText("Wash your hand with soap to stop the alarm")
+            .setContentText("Wash your hand with soap for ${WashConfig.WASH_SECONDS_REQUIRED.toInt()} seconds to stop the alarm")
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)

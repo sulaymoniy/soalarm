@@ -12,6 +12,7 @@ import android.provider.Settings
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import com.sulaymoniy.soalarm.alarm.AlarmScheduler
+import com.sulaymoniy.soalarm.ring.WashConfig
 
 /** One thing the app needs from the user, with a plain-language reason. */
 enum class Need(val title: String, val why: String) {
@@ -29,7 +30,8 @@ enum class Need(val title: String, val why: String) {
     ),
     Camera(
         "Camera",
-        "Used only while an alarm rings, to check you're washing your hand with soap. Pictures never leave your phone.",
+        "Used only while an alarm rings, to check you're washing your hand with soap " +
+            "(${WashConfig.WASH_SECONDS_REQUIRED.toInt()} seconds). Pictures never leave your phone.",
     ),
     Battery(
         "Battery: unrestricted",

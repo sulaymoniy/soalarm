@@ -90,6 +90,10 @@ class HandWashAnalyzer(
 
             val foam = if (hands.isEmpty()) {
                 FoamResult(0f, foamDetector.skinReady, sharp = false)
+            } else if (tracker.isSoaped && !debug) {
+                // Soap already confirmed for this alarm: skip the soap check so more frames
+                // per second go to the rubbing check. (-1 = "not measured".)
+                FoamResult(-1f, foamDetector.skinReady, sharp = false)
             } else {
                 val n = bitmap.width * bitmap.height
                 if (pixels.size != n) pixels = IntArray(n)
