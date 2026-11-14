@@ -26,7 +26,11 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.produceState
+import com.sulaymoniy.soalarm.alarm.RingState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -67,8 +71,17 @@ import kotlin.math.ceil
  * fills only while washing is detected, a soap meter and simple hints.
  */
 @Composable
-fun HandWashScreen(onPassed: () -> Unit, onCameraFailed: (String) -> Unit) {
+fun HandWashScreen(onPassed: () -> Unit, onCameraFailed: (String) -> Unit, onCantWash: () -> Unit) {
     val context = LocalContext.current
+    // After a few minutes of ringing, offer a harder math way out (no sink nearby, etc.).
+    val showCantWash by produceState(
+        RingState.ringingForMs(context) >= WashConfig.MANUAL_FALLBACK_AFTER_MS,
+    ) {
+        while (!value) {
+            delay(1_000)
+            value = RingState.ringingForMs(context) >= WashConfig.MANUAL_FALLBACK_AFTER_MS
+        }
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnPassed by rememberUpdatedState(onPassed)
     val currentOnFailed by rememberUpdatedState(onCameraFailed)
@@ -187,6 +200,18 @@ fun HandWashScreen(onPassed: () -> Unit, onCameraFailed: (String) -> Unit) {
             Spacer(Modifier.weight(1f))
             ProgressRing(state)
             Spacer(Modifier.weight(1f))
+
+            if (showCantWash) {
+                TextButton(
+                    onClick = onCantWash,
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color.White),
+                    modifier = Modifier
+                        .padding(bottom = 8.dp)
+                        .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(50)),
+                ) {
+                    Text("Can't wash right now? Solve math instead")
+                }
+            }
 
             HintCard(state)
         }

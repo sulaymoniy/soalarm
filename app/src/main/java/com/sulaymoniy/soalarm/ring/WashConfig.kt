@@ -35,4 +35,10 @@ object WashConfig {
 
     /** If the camera delivers no frames for this long, fall back to math problems. */
     const val CAMERA_NO_FRAMES_TIMEOUT_MS = 8_000L
+
+    /** After the alarm has rung this long, offer "Can't wash right now? Solve math instead". */
+    const val MANUAL_FALLBACK_AFTER_MS = 3 * 60 * 1000L
+
+    /** That optional way out is harder than the camera-failure fallback. */
+    const val MANUAL_FALLBACK_PROBLEMS = 5
 }

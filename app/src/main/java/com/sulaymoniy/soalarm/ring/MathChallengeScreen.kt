@@ -14,6 +14,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -29,11 +30,20 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlin.random.Random
 
-private const val PROBLEMS_REQUIRED = 3
-
-/** Backup way to stop the alarm when the camera can't be used: solve 3 problems. */
+/**
+ * Backup way to stop the alarm by solving math problems.
+ * - Camera denied or broken: 3 easy problems.
+ * - "Can't wash right now?" after a few minutes: [hard] problems, more of them.
+ */
 @Composable
-fun MathChallengeScreen(reason: String?, onSolved: () -> Unit) {
+fun MathChallengeScreen(
+    reason: String?,
+    onSolved: () -> Unit,
+    problems: Int = 3,
+    hard: Boolean = false,
+    onBack: (() -> Unit)? = null,
+) {
+    val newProblem = { if (hard) newHardProblem() else newEasyProblem() }
     var solved by rememberSaveable { mutableIntStateOf(0) }
     var problem by rememberSaveable { mutableStateOf(newProblem()) }
     var answer by rememberSaveable { mutableStateOf("") }
@@ -44,7 +54,7 @@ fun MathChallengeScreen(reason: String?, onSolved: () -> Unit) {
             solved++
             answer = ""
             wrong = false
-            if (solved >= PROBLEMS_REQUIRED) onSolved() else problem = newProblem()
+            if (solved >= problems) onSolved() else problem = newProblem()
         } else {
             wrong = true
         }
@@ -69,7 +79,7 @@ fun MathChallengeScreen(reason: String?, onSolved: () -> Unit) {
                 )
             }
             Text(
-                "Problem ${solved + 1} of $PROBLEMS_REQUIRED",
+                "Problem ${solved + 1} of $problems",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.primary,
             )
@@ -95,12 +105,15 @@ fun MathChallengeScreen(reason: String?, onSolved: () -> Unit) {
             Button(onClick = check, modifier = Modifier.fillMaxWidth()) {
                 Text("Check")
             }
+            if (onBack != null) {
+                TextButton(onClick = onBack) { Text("Back to hand washing") }
+            }
         }
     }
 }
 
 /** Returns question text and its answer. */
-private fun newProblem(): Pair<String, Int> = when (Random.nextInt(3)) {
+private fun newEasyProblem(): Pair<String, Int> = when (Random.nextInt(3)) {
     0 -> {
         val a = Random.nextInt(12, 90)
         val b = Random.nextInt(12, 90)
@@ -115,5 +128,30 @@ private fun newProblem(): Pair<String, Int> = when (Random.nextInt(3)) {
         val a = Random.nextInt(3, 10)
         val b = Random.nextInt(11, 25)
         "$a × $b" to a * b
+    }
+}
+
+/** Harder: two-digit multiplication, three-digit sums, and mixed operations. */
+private fun newHardProblem(): Pair<String, Int> = when (Random.nextInt(4)) {
+    0 -> {
+        val a = Random.nextInt(13, 50)
+        val b = Random.nextInt(12, 30)
+        "$a × $b" to a * b
+    }
+    1 -> {
+        val a = Random.nextInt(150, 1000)
+        val b = Random.nextInt(150, 1000)
+        "$a + $b" to a + b
+    }
+    2 -> {
+        val a = Random.nextInt(500, 1000)
+        val b = Random.nextInt(120, a)
+        "$a − $b" to a - b
+    }
+    else -> {
+        val a = Random.nextInt(6, 20)
+        val b = Random.nextInt(6, 20)
+        val c = Random.nextInt(20, 100)
+        "$a × $b + $c" to a * b + c
     }
 }

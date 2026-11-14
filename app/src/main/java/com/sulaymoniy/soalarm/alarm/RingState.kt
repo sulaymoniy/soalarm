@@ -16,22 +16,37 @@ object RingState {
     private const val PREFS = "ring_state"
     private const val KEY_ID = "ringing_alarm_id"
     private const val KEY_BOOT = "boot_time"
+    private const val KEY_START = "ring_started_at"
 
     private val _ringingId = MutableStateFlow<Long?>(null)
     val ringingId: StateFlow<Long?> = _ringingId.asStateFlow()
 
     fun set(context: Context, alarmId: Long) {
+        // Same ring resumed after the process was killed? Keep its original start time.
+        val resumed = current(context) == alarmId
+        val startedAt = if (resumed) prefs(context).getLong(KEY_START, now()) else now()
         _ringingId.value = alarmId
         prefs(context).edit {
             putLong(KEY_ID, alarmId)
             putLong(KEY_BOOT, bootTime())
+            putLong(KEY_START, startedAt)
         }
     }
 
     fun clear(context: Context) {
         _ringingId.value = null
-        prefs(context).edit { remove(KEY_ID); remove(KEY_BOOT) }
+        prefs(context).edit { remove(KEY_ID); remove(KEY_BOOT); remove(KEY_START) }
     }
+
+    /** How long the current alarm has been ringing, in milliseconds (0 if not ringing). */
+    fun ringingForMs(context: Context): Long {
+        if (current(context) == null) return 0L
+        val start = prefs(context).getLong(KEY_START, now())
+        return (now() - start).coerceAtLeast(0L)
+    }
+
+    /** Time since boot: not affected by the user changing the clock. */
+    private fun now() = SystemClock.elapsedRealtime()
 
     /** Ringing alarm id from memory, or from disk after a process restart in this boot. */
     fun current(context: Context): Long? {

@@ -113,7 +113,7 @@ class AlarmRingActivity : ComponentActivity() {
     }
 }
 
-private enum class RingMode { Camera, Math, Done }
+private enum class RingMode { Camera, Math, HardMath, Done }
 
 @Composable
 private fun RingScreen(onPassed: () -> Unit) {
@@ -142,8 +142,16 @@ private fun RingScreen(onPassed: () -> Unit) {
                 mathReason = reason
                 mode = RingMode.Math
             },
+            onCantWash = { mode = RingMode.HardMath },
         )
         RingMode.Math -> MathChallengeScreen(reason = mathReason, onSolved = pass)
+        RingMode.HardMath -> MathChallengeScreen(
+            reason = "No sink nearby? Solve ${WashConfig.MANUAL_FALLBACK_PROBLEMS} harder problems instead.",
+            onSolved = pass,
+            problems = WashConfig.MANUAL_FALLBACK_PROBLEMS,
+            hard = true,
+            onBack = { mode = RingMode.Camera },
+        )
         RingMode.Done -> GoodMorning(onFinished = { activity.finishAfterSuccess() })
     }
 }
