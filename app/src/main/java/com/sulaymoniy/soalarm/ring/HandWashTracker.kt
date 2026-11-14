@@ -16,6 +16,7 @@ data class Pt(val x: Float, val y: Float)
 enum class WashHint(val text: String) {
     ShowHand("Show your hand to the camera"),
     AddSoap("Add soap"),
+    CheckingSoap("Soap found, keep lathering…"),
     RubHand("Rub your hand"),
     KeepGoing("Keep going!"),
 }
@@ -24,9 +25,11 @@ enum class WashHint(val text: String) {
 data class WashDebug(
     val handsVisible: Int = 0,
     val skinReady: Boolean = false,
+    val sharp: Boolean = false,
     val foamCoverage: Float = 0f,
     val foamBaseline: Float = 0f,
     val foamNow: Boolean = false,
+    val foamSeconds: Float = 0f,
     val rubbing: Boolean = false,
     val rubHz: Float = 0f,
     val rubAmplitude: Float = 0f,
@@ -36,6 +39,8 @@ data class WashState(
     val washSeconds: Float = 0f,
     val hint: WashHint = WashHint.ShowHand,
     val washingNow: Boolean = false,
+    /** Soap has been confirmed on the hand; from now on only rubbing is needed. */
+    val soaped: Boolean = false,
     val passed: Boolean = false,
     val frames: Long = 0,
     val debug: WashDebug = WashDebug(),
@@ -46,21 +51,21 @@ data class WashState(
 /**
  * Decides, frame by frame, whether the user is washing with soap.
  *
- * The ring only fills while BOTH are true at the same moment:
- * - FOAM: new lather covers a clear part of the hand (see [FoamDetector]), measured
- *   against the hand's own lowest reading, so white skin highlights or a dry hand
- *   never count.
- * - RUBBING: a sustained back-and-forth of the fingers relative to the palm at
- *   1-4 times per second. Positions are measured in the hand's own frame (centred on
- *   the palm, rotated and scaled with it), so waving the whole hand, moving or shaking
- *   the phone, or holding an object still doesn't count.
+ * 1. SOAP must be CONFIRMED once: soap (see [FoamDetector]) seen on sharp frames for
+ *    [WashConfig.FOAM_CONFIRM_SECONDS] in total, measured against the hand's own lowest
+ *    reading. Blurry frames are skipped, not counted as "no soap". After that the hand is
+ *    "soaped" for the rest of the alarm.
+ * 2. Then only RUBBING fills the ring: a sustained back-and-forth of the fingers relative
+ *    to the palm at 1-4 times per second. Positions are measured in the hand's own frame
+ *    (centred on the palm, rotated and scaled with it), so waving the whole hand, moving
+ *    or shaking the phone, or holding an object still doesn't count.
  *
  * One hand is enough. Two hands sliding against each other also count. If the hand is
  * briefly lost, progress pauses and continues later; it never resets.
  *
  * Pure Kotlin (no Android types), so it can be unit tested.
  */
-class HandWashTracker {
+class HandWashTracker(initiallySoaped: Boolean = false) {
     private var lastTs = -1L
     private var frames = 0L
 
@@ -70,11 +75,24 @@ class HandWashTracker {
     private var prevPair: Pair<Palm, Palm>? = null
 
     private var foamSmoothed = -1f
+    private var lastFoamTs = -1L
     private var foamBaselineMin = Float.MAX_VALUE
+    private var foamSeconds = 0f
+    private var soaped = initiallySoaped
 
     private var washSeconds = 0f
 
-    fun update(timestampMs: Long, hands: List<List<Pt>>, foamCoverage: Float, skinReady: Boolean = true): WashState {
+    /**
+     * [sharp] = false means the frame is too blurry to judge soap: the soap check skips it
+     * (rubbing is still measured).
+     */
+    fun update(
+        timestampMs: Long,
+        hands: List<List<Pt>>,
+        foamCoverage: Float,
+        skinReady: Boolean = true,
+        sharp: Boolean = true,
+    ): WashState {
         frames++
         val dt = if (lastTs < 0) 0f else ((timestampMs - lastTs) / 1000f).coerceIn(0f, 0.5f)
         lastTs = timestampMs
@@ -82,17 +100,24 @@ class HandWashTracker {
         val palms = hands.filter { it.size >= 21 }.map { Palm.of(it) }
         val visible = palms.isNotEmpty()
 
-        // ---- Foam: smoothed, compared with the lowest level seen ("before" washing).
+        // ---- Soap: only on sharp frames; smoothed; compared with the lowest level ("before").
         var foamNow = false
-        var baseline = 0f
-        if (visible && skinReady) {
+        val baseline = min(foamBaselineMin, WashConfig.FOAM_BASELINE_CAP)
+        if (visible && skinReady && sharp && !soaped) {
+            val fdt = if (lastFoamTs < 0) 0f else ((timestampMs - lastFoamTs) / 1000f).coerceIn(0f, 0.5f)
+            lastFoamTs = timestampMs
             foamSmoothed = if (foamSmoothed < 0f) foamCoverage else {
-                val alpha = 1f - exp(-dt / WashConfig.FOAM_SMOOTHING_SECONDS)
+                val alpha = 1f - exp(-fdt / WashConfig.FOAM_SMOOTHING_SECONDS)
                 foamSmoothed + (foamCoverage - foamSmoothed) * alpha
             }
             foamBaselineMin = min(foamBaselineMin, foamSmoothed)
-            baseline = min(foamBaselineMin, WashConfig.FOAM_BASELINE_CAP)
-            foamNow = foamSmoothed - baseline >= WashConfig.FOAM_COVERAGE_THRESHOLD
+            foamNow = foamSmoothed - min(foamBaselineMin, WashConfig.FOAM_BASELINE_CAP) >= WashConfig.FOAM_COVERAGE_THRESHOLD
+            foamSeconds = if (foamNow) {
+                foamSeconds + fdt
+            } else {
+                max(0f, foamSeconds - fdt * WashConfig.FOAM_CONFIRM_LEAK_PER_SECOND)
+            }
+            if (foamSeconds >= WashConfig.FOAM_CONFIRM_SECONDS) soaped = true
         }
 
         // ---- Rubbing: rhythmic finger motion (one hand) or hands sliding (two hands).
@@ -111,12 +136,14 @@ class HandWashTracker {
         }
         val rubbing = visible && best.ok
 
-        val washingNow = visible && foamNow && rubbing
+        // The ring only fills once soap is confirmed, and only while rubbing.
+        val washingNow = visible && soaped && rubbing
         if (washingNow) washSeconds = (washSeconds + dt).coerceAtMost(WashConfig.WASH_SECONDS_REQUIRED)
 
         val hint = when {
             !visible -> WashHint.ShowHand
-            !foamNow -> WashHint.AddSoap
+            !soaped && foamSeconds > 0f -> WashHint.CheckingSoap
+            !soaped -> WashHint.AddSoap
             !rubbing -> WashHint.RubHand
             else -> WashHint.KeepGoing
         }
@@ -124,14 +151,17 @@ class HandWashTracker {
             washSeconds = washSeconds,
             hint = hint,
             washingNow = washingNow,
+            soaped = soaped,
             passed = washSeconds >= WashConfig.WASH_SECONDS_REQUIRED,
             frames = frames,
             debug = WashDebug(
                 handsVisible = palms.size,
                 skinReady = skinReady,
+                sharp = sharp,
                 foamCoverage = max(foamSmoothed, 0f),
-                foamBaseline = baseline,
+                foamBaseline = if (foamBaselineMin == Float.MAX_VALUE) 0f else baseline,
                 foamNow = foamNow,
+                foamSeconds = if (soaped) WashConfig.FOAM_CONFIRM_SECONDS else foamSeconds,
                 rubbing = rubbing,
                 rubHz = best.hz,
                 rubAmplitude = best.amplitude,

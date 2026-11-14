@@ -1,15 +1,16 @@
 # SoAlarm Privacy Policy
 
-_Last updated: November 14, 2026_
+_Last updated: November 15, 2026_
 
 SoAlarm is an alarm clock that asks you to wash your hand to turn the alarm off. We built it so that **nothing leaves your phone**.
 
 ## What SoAlarm uses
 
 **Camera**
-- The camera is used **only while an alarm is ringing**, to check that you are washing your hand (one hand is enough) with soap.
+- The camera is used **only while an alarm is ringing**, to check that you are washing your hand (one hand is enough) with soap, or when you open **Test wash check** yourself.
 - Camera frames are processed **on your device only**, in memory, by an on-device hand-tracking model (Google MediaPipe Hand Landmarker).
-- Frames are **never stored, never recorded, and never sent** anywhere. Each frame is discarded as soon as it has been checked.
+- Frames are **never sent** anywhere and are **not stored**: each frame is discarded as soon as it has been checked.
+- The only exception is the **Save frame** button in **Test wash check**. When *you* tap it, the current camera picture (plus a copy with the check's values drawn on it) is saved to your phone's **Pictures/SoAlarm** folder, like a screenshot. It stays on your phone; SoAlarm never uploads it, and you can delete it in your gallery at any time.
 - If you don't allow the camera, you can stop alarms by solving simple math problems instead.
 
 **Alarms you create**
@@ -19,7 +20,7 @@ SoAlarm is an alarm clock that asks you to wash your hand to turn the alarm off.
 
 - No internet access. The app does not even request the Internet permission.
 - No accounts, no analytics, no ads, no tracking, no third-party data sharing.
-- No photos, videos or audio recordings are made.
+- No photos, videos or audio recordings are made, except the pictures you save yourself with **Save frame** in Test wash check.
 
 ## Other permissions
 
@@ -27,7 +28,7 @@ SoAlarm is an alarm clock that asks you to wash your hand to turn the alarm off.
 
 ## Deleting your data
 
-Uninstalling SoAlarm, or using **Settings → Apps → SoAlarm → Storage → Clear data**, removes everything the app saved.
+Uninstalling SoAlarm, or using **Settings → Apps → SoAlarm → Storage → Clear data**, removes everything the app saved. Pictures you saved with **Save frame** are in your gallery (Pictures/SoAlarm) and can be deleted there.
 
 ## Children
 

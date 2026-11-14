@@ -11,6 +11,7 @@ import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.core.Delegate
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** What the test-mode overlay draws for one frame (all in analysis-image pixels). */
 class DebugFrame(
@@ -34,9 +35,21 @@ class DebugFrame(
 class HandWashAnalyzer(
     context: Context,
     private val debug: Boolean,
+    initiallySoaped: Boolean,
     private val onState: (WashState) -> Unit,
+    /** Called once when soap is confirmed on the hand. */
+    private val onSoaped: () -> Unit = {},
     private val onDebugFrame: ((DebugFrame) -> Unit)? = null,
+    /** Test mode: result message of "Save frame". */
+    private val onSaved: ((String) -> Unit)? = null,
 ) : ImageAnalysis.Analyzer {
+
+    private val appContext = context.applicationContext
+    private val saveRequested = AtomicBoolean(false)
+    private var reportedSoaped = initiallySoaped
+
+    /** Test mode: save the next analysed frame and its values to Pictures/SoAlarm. */
+    fun requestSave() = saveRequested.set(true)
 
     private val landmarker: HandLandmarker = HandLandmarker.createFromOptions(
         context,
@@ -55,7 +68,7 @@ class HandWashAnalyzer(
             .build(),
     )
 
-    private val tracker = HandWashTracker()
+    private val tracker = HandWashTracker(initiallySoaped)
     private val foamDetector = FoamDetector()
     private var pixels = IntArray(0)
     private var lastTimestamp = 0L
@@ -76,14 +89,22 @@ class HandWashAnalyzer(
             }
 
             val foam = if (hands.isEmpty()) {
-                FoamResult(0f, foamDetector.skinReady, 0)
+                FoamResult(0f, foamDetector.skinReady, sharp = false)
             } else {
                 val n = bitmap.width * bitmap.height
                 if (pixels.size != n) pixels = IntArray(n)
                 bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
                 foamDetector.analyze(pixels, bitmap.width, bitmap.height, hands, wantDebug = debug)
             }
-            onState(tracker.update(ts, hands, foam.coverage, foam.skinReady))
+            val state = tracker.update(ts, hands, foam.coverage, foam.skinReady, foam.sharp)
+            onState(state)
+            if (state.soaped && !reportedSoaped) {
+                reportedSoaped = true
+                onSoaped()
+            }
+            if (saveRequested.getAndSet(false)) {
+                onSaved?.invoke(FrameSaver.save(appContext, bitmap, hands, foam, state))
+            }
 
             if (debug && onDebugFrame != null) {
                 val d = foam.debug
@@ -111,12 +132,13 @@ class HandWashAnalyzer(
         landmarker.close()
     }
 
-    /** Blue tint = hand mask, green = foam, yellow = bubble highlights. */
+    /** Blue tint = hand mask, orange = soap bar cut out, green = soapy, yellow = bubble highlights. */
     private fun overlayBitmap(d: FoamDebug): Bitmap {
         val colors = IntArray(d.w * d.h) { i ->
             when {
                 d.bubbles[i] -> 0xFFFFEB3B.toInt()
-                d.foam[i] -> 0xCC00E676.toInt()
+                d.foam[i] -> 0xAA00E676.toInt()
+                d.bar[i] -> 0x88FF9800.toInt()
                 d.mask[i] -> 0x553D8BFF
                 else -> 0
             }

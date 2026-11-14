@@ -17,26 +17,37 @@ object RingState {
     private const val KEY_ID = "ringing_alarm_id"
     private const val KEY_BOOT = "boot_time"
     private const val KEY_START = "ring_started_at"
+    private const val KEY_SOAPED = "soaped"
 
     private val _ringingId = MutableStateFlow<Long?>(null)
     val ringingId: StateFlow<Long?> = _ringingId.asStateFlow()
 
     fun set(context: Context, alarmId: Long) {
-        // Same ring resumed after the process was killed? Keep its original start time.
+        // Same ring resumed after the process was killed? Keep its start time and soap status.
         val resumed = current(context) == alarmId
         val startedAt = if (resumed) prefs(context).getLong(KEY_START, now()) else now()
+        val soaped = resumed && prefs(context).getBoolean(KEY_SOAPED, false)
         _ringingId.value = alarmId
         prefs(context).edit {
             putLong(KEY_ID, alarmId)
             putLong(KEY_BOOT, bootTime())
             putLong(KEY_START, startedAt)
+            putBoolean(KEY_SOAPED, soaped)
         }
     }
 
     fun clear(context: Context) {
         _ringingId.value = null
-        prefs(context).edit { remove(KEY_ID); remove(KEY_BOOT); remove(KEY_START) }
+        prefs(context).edit { remove(KEY_ID); remove(KEY_BOOT); remove(KEY_START); remove(KEY_SOAPED) }
     }
+
+    /** Soap has been confirmed on the hand for the current alarm: only rubbing is left. */
+    fun markSoaped(context: Context) {
+        prefs(context).edit { putBoolean(KEY_SOAPED, true) }
+    }
+
+    fun isSoaped(context: Context): Boolean =
+        current(context) != null && prefs(context).getBoolean(KEY_SOAPED, false)
 
     /** How long the current alarm has been ringing, in milliseconds (0 if not ringing). */
     fun ringingForMs(context: Context): Long {

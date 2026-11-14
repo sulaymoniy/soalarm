@@ -68,29 +68,34 @@ Works on Android 8.0 (API 26) through Android 17 (API 37).
 
 ## 3. Tuning the hand-washing check
 
-The ring only fills while **lather is on your hand AND you're rubbing**, both at the same time.
+How it decides:
+
+1. **Soap is confirmed once.** When soap has been seen on your hand for 2 seconds in total, the hand counts as "soaped" for the rest of the alarm ("✅ Soap confirmed"). Thin bar-soap lather, thick foam and wet, shiny, soap-filmed skin all count. Only sharp frames are checked: blurry frames (rubbing, shaky phone) are skipped, not counted as "no soap". A soap bar held in your palm is ignored.
+2. **Then only rubbing fills the ring:** your fingers moving back and forth against your palm, 1–4 times per second.
 
 **Test it without an alarm:** in the app, tap **⋮ → Test wash check**. The camera screen opens with a debug overlay:
 
-- **Blue** = the hand mask (only these pixels are checked for soap; the background is ignored)
-- **Green** = pixels counted as foam, **yellow** = bubble highlights
-- Live values with ✅/❌ for each condition: hand visible, skin colour learned, foam % (vs. your hand's "before" level), rubbing frequency and amplitude, seconds counted
+- **Blue** = your hand (only these pixels are checked; the background is ignored), **orange** = soap bar (cut out), **green** = soapy, **yellow** = bubble highlights
+- Live values with ✅/❌ for each condition: hand visible, skin colour learned, sharp or blurry, soap %, soap confirmed (x / 2 s), rubbing frequency and amplitude, seconds counted
+- **Save frame** saves the current camera picture and a copy with all values drawn on it to your phone's **Pictures/SoAlarm** folder, so you can share real examples for tuning
 
 All the numbers are in one file:
 [`app/src/main/java/com/sulaymoniy/soalarm/ring/WashConfig.kt`](app/src/main/java/com/sulaymoniy/soalarm/ring/WashConfig.kt)
 
 | Constant | What it does |
 |---|---|
-| `WASH_SECONDS_REQUIRED` | Seconds of "soapy hand + rubbing" needed (20) |
-| `FOAM_COVERAGE_THRESHOLD` | **Soap sensitivity:** share of the hand that must be newly covered by foam (12%). Raise it if a dry hand passes; lower it if real lather isn't detected |
-| `BUBBLE_MIN_CONTRAST`, `FOAM_MIN_BUBBLES` | How "bubbly" foam must look. Raise them if smooth white things count; lower them if lather is missed |
-| `FOAM_BRIGHTER_THAN_SKIN`, `FOAM_SATURATION_VS_SKIN` | How much whiter than your own skin foam must be |
+| `WASH_SECONDS_REQUIRED` | Seconds of rubbing (after soap is confirmed) needed (20) |
+| `FOAM_COVERAGE_THRESHOLD` | **Soap sensitivity:** share of the hand that must be newly soapy (4%). Raise it if a dry hand passes; lower it if real lather isn't detected |
+| `FOAM_CONFIRM_SECONDS` | How long soap must be seen in total to be confirmed (2 s) |
+| `BUBBLE_MIN_CONTRAST`, `FOAM_MIN_BUBBLES` | How "bubbly" soap must look. Raise them if smooth white things count; lower them if lather is missed |
+| `SHARPNESS_RELATIVE` | How sharp a frame must be (vs. recent frames) to judge soap |
+| `SOAP_BAR_SATURATION_ABOVE_HAND` | How colourful a smooth area must be to be treated as a soap bar and ignored |
 | `RUB_MIN_HZ`, `RUB_MAX_HZ` | Rubbing rhythm: back-and-forth 1–4 times per second |
 | `RUB_MIN_AMPLITUDE` | How far your fingers must move against your palm. Lower it if real rubbing isn't detected |
 | `MANUAL_FALLBACK_AFTER_MS` | After the alarm has rung this long (3 min), a **"Can't wash right now? Solve math instead"** button appears |
 | `MANUAL_FALLBACK_PROBLEMS` | How many harder math problems that button asks for (5) |
 
-Good light helps. Show your hand to the camera dry first, then lather up: SoAlarm compares the foam with how your hand looked before.
+Good light helps. If you can, show your hand to the camera dry first, then lather up: SoAlarm compares the soap with how your hand looked before.
 
 **App icon:** the source art is `design/app_icon_source.webp`. The launcher icon layers live in `app/src/main/res/mipmap-*`, and `design/play_store_icon_512.png` is the 512×512 icon for the Play Store listing.
 

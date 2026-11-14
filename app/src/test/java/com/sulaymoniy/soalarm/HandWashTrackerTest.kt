@@ -22,14 +22,15 @@ class HandWashTrackerTest {
     private fun run(
         seconds: Double,
         foam: (t: Double) -> Float,
+        sharp: (frame: Int) -> Boolean = { true },
+        tracker: HandWashTracker = HandWashTracker(),
         frame: (t: Double) -> List<List<Pt>>,
     ): WashState {
-        val tracker = HandWashTracker()
         var state = WashState()
         val fps = 15
         for (i in 0 until (seconds * fps).toInt()) {
             val t = i / fps.toDouble()
-            state = tracker.update((t * 1000).toLong(), frame(t), foam(t))
+            state = tracker.update((t * 1000).toLong(), frame(t), foam(t), skinReady = true, sharp = sharp(i))
         }
         return state
     }
@@ -105,10 +106,11 @@ class HandWashTrackerTest {
 
     @Test
     fun foamMustBeNewNotThereFromTheStart() {
-        // The hand reads 10% "foam" from the start (shiny skin, light) and never more: no pass,
-        // because the baseline (capped at 5%) plus the 12% threshold is never reached.
-        val s = run(25.0, { 0.10f }) { t -> listOf(rubbing(t)) }
+        // The hand reads 8% "soap" from the start (shiny skin, light) and never more: no pass,
+        // because the baseline (capped at 5%) plus the 4% threshold is never reached.
+        val s = run(25.0, { 0.08f }) { t -> listOf(rubbing(t)) }
         assertEquals(0f, s.washSeconds)
+        assertFalse(s.soaped)
     }
 
     @Test
@@ -146,5 +148,60 @@ class HandWashTrackerTest {
         }
         assertTrue("progress kept: ${state.washSeconds} > $before", state.washSeconds > before)
         assertTrue(state.washSeconds < WashConfig.WASH_SECONDS_REQUIRED)
+    }
+
+    // ---- Soap only has to be confirmed once -------------------------------------------
+
+    @Test
+    fun soapConfirmedOnceThenOnlyRubbingCounts() {
+        // Lather visible for 3 s, then hidden by blur/hand angle for the rest: still passes.
+        val s = run(30.0, { t -> if (t < 3) soapy else dry }) { t -> listOf(rubbing(t)) }
+        assertTrue(s.soaped)
+        assertTrue("wash=${s.washSeconds}", s.passed)
+    }
+
+    @Test
+    fun ringDoesNotFillBeforeSoapIsConfirmed() {
+        // 1.5 s of soap is not enough to confirm (needs 2 s).
+        val s = run(25.0, { t -> if (t < 1.5) soapy else dry }) { t -> listOf(rubbing(t)) }
+        assertFalse(s.soaped)
+        assertEquals(0f, s.washSeconds)
+    }
+
+    @Test
+    fun blurryFramesAreSkippedNotCountedAsNoSoap() {
+        // Every other frame is blurry and reads 0 soap: those frames must not cancel the soap.
+        val s = run(30.0, { t -> if (((t * 15).toInt() % 2) == 0) soapy else dry }, sharp = { it % 2 == 0 }) { t ->
+            listOf(rubbing(t))
+        }
+        assertTrue(s.soaped)
+        assertTrue(s.passed)
+    }
+
+    @Test
+    fun blurryFramesCannotConfirmSoap() {
+        val s = run(25.0, { soapy }, sharp = { false }) { t -> listOf(rubbing(t)) }
+        assertFalse(s.soaped)
+        assertEquals(0f, s.washSeconds)
+    }
+
+    @Test
+    fun shortFalseSoapBurstsDoNotAddUp() {
+        // A dry hand that looks "soapy" for 0.5 s every 5 s (a glint, a reflection) for a minute.
+        val s = run(60.0, { t -> if (t % 5.0 < 0.5) soapy else dry }) { t -> listOf(rubbing(t)) }
+        assertFalse(s.soaped)
+        assertEquals(0f, s.washSeconds)
+    }
+
+    @Test
+    fun alreadySoapedEarlierInThisAlarmOnlyNeedsRubbing() {
+        val s = run(25.0, { dry }, tracker = HandWashTracker(initiallySoaped = true)) { t -> listOf(rubbing(t)) }
+        assertTrue(s.passed)
+    }
+
+    @Test
+    fun alreadySoapedStillNeedsRealRubbing() {
+        val s = run(25.0, { dry }, tracker = HandWashTracker(initiallySoaped = true)) { t -> listOf(waving(t)) }
+        assertEquals(0f, s.washSeconds)
     }
 }

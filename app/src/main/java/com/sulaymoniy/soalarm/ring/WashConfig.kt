@@ -20,8 +20,42 @@ object WashConfig {
     /** Finger width used for the mask, as a fraction of hand length (wrist to middle knuckle). */
     const val FINGER_MASK_RADIUS = 0.09f
 
-    /** Large hands are analysed on a smaller grid so every phone does the same amount of work. */
-    const val FOAM_GRID_MAX_SIZE = 320
+    /**
+     * Very large hands are analysed on a smaller grid to save work. Kept high so small
+     * bar-soap bubbles survive the downscaling.
+     */
+    const val FOAM_GRID_MAX_SIZE = 480
+
+    // ---------------------------------------------------------------------------------
+    // Soap bar in the hand: strongly coloured, smooth areas (e.g. an orange bar held in
+    // the palm) are cut out of the mask, for both the skin sample and the foam check.
+    // ---------------------------------------------------------------------------------
+
+    /** A pixel is "soap bar" if it's this much more colourful than the hand's typical pixel... */
+    const val SOAP_BAR_SATURATION_ABOVE_HAND = 0.20f
+
+    /** ...and smooth: brightness varies less than this (std. dev., 0..1) in a 5x5 patch. */
+    const val SOAP_BAR_MAX_TEXTURE = 0.03f
+
+    /** The cut-out grows by this many grid pixels, so the bar's outline isn't checked either. */
+    const val SOAP_BAR_GROW = 2
+
+    // ---------------------------------------------------------------------------------
+    // Sharpness: rubbing blurs the picture and wipes out small bubbles, so the foam check
+    // only uses sharp frames. Blurry frames are skipped, NOT counted as "no foam".
+    // ---------------------------------------------------------------------------------
+
+    /**
+     * A frame is sharp if its sharpness (Laplacian variance on the hand) is at least this
+     * fraction of the sharpest recent frame of this hand.
+     */
+    const val SHARPNESS_RELATIVE = 0.5f
+
+    /** How fast the "sharpest recent frame" memory fades, per frame (0.98 = ~2 s). */
+    const val SHARPNESS_MEMORY = 0.98f
+
+    /** Absolute floor: below this a frame is always blurry. */
+    const val SHARPNESS_MIN = 0.00002f
 
     // ---------------------------------------------------------------------------------
     // Skin colour: sampled from the hand during the first frames, so "white" is judged
@@ -35,10 +69,11 @@ object WashConfig {
     const val SKIN_MIN_SATURATION = 0.15f
 
     // ---------------------------------------------------------------------------------
-    // Foam = bubbly white ON the hand.
+    // Soap on the hand: small bright bubble highlights spread over the skin. This covers
+    // thick white foam, thin bar-soap lather, and wet, shiny, soap-filmed skin.
     // ---------------------------------------------------------------------------------
 
-    /** A foam pixel is never darker than this (0..1), whatever the skin colour... */
+    /** A bubble highlight is never darker than this (0..1), whatever the skin colour... */
     const val FOAM_MIN_BRIGHTNESS = 0.45f
 
     /** ...and must be at least this much brighter than the skin (0..1)... */
@@ -51,39 +86,56 @@ object WashConfig {
     const val FOAM_SATURATION_VS_SKIN = 0.65f
 
     /**
-     * Bubble texture: a "bubble highlight" is a pixel brighter than all 8 neighbours by at
-     * least this much on average (0..1). Smooth white things (sink, tiles, towel, soap bar)
-     * have almost none; lather is full of them.
+     * Bubble highlight: brighter than all 8 neighbours by at least this much on average
+     * (0..1). Smooth white things (sink, tiles, towel, soap bar) have almost none.
      */
-    const val BUBBLE_MIN_CONTRAST = 0.05f
+    const val BUBBLE_MIN_CONTRAST = 0.03f
+
+    /** Of a bubble highlight's 8 neighbours, at least this many must be greyish (not plain skin). */
+    const val BUBBLE_MIN_GREY_NEIGHBOURS = 4
 
     /**
-     * Of a bubble highlight's 8 neighbours, at least this many must be greyish (lather's
-     * gaps are grey shadows). This rejects the edge of a white soap bar against skin.
+     * A bubble is a SMALL spot: 2 pixels away it must be darker (by [BUBBLE_MIN_CONTRAST]) in
+     * at least this many of 8 directions. The edge of a white soap bar or sink stays bright
+     * along one side, so it is rejected.
      */
-    const val BUBBLE_MIN_GREY_NEIGHBOURS = 6
+    const val BUBBLE_MIN_FALLOFF_DIRECTIONS = 6
 
-    /** Look this many grid pixels around each pixel when counting bubble highlights. */
-    const val FOAM_TEXTURE_RADIUS = 3
+    /** Look this many grid pixels around each hand pixel when counting bubble highlights. */
+    const val FOAM_TEXTURE_RADIUS = 4
 
-    /** A whitish pixel is foam only if it has at least this many bubble highlights nearby. */
-    const val FOAM_MIN_BUBBLES = 3
+    /** A hand pixel counts as soapy if at least this many bubble highlights are nearby. */
+    const val FOAM_MIN_BUBBLES = 2
 
     /**
-     * SOAP THRESHOLD: share (0..1) of the hand that must be NEWLY covered by foam, i.e.
-     * above the hand's lowest foam reading so far. Raise it if a dry hand passes;
-     * lower it if real lather isn't detected.
+     * SOAP THRESHOLD: share (0..1) of the hand that must be NEWLY soapy, i.e. above the
+     * hand's lowest reading so far. Raise it if a dry hand passes; lower it if real lather
+     * isn't detected.
      */
-    const val FOAM_COVERAGE_THRESHOLD = 0.12f
+    const val FOAM_COVERAGE_THRESHOLD = 0.04f
 
     /**
-     * The "before" foam level never counts as higher than this. So if the very first
-     * frames already show lather, the user isn't locked out.
+     * The "before" level never counts as higher than this. So if the very first frames
+     * already show lather, the user isn't locked out.
      */
     const val FOAM_BASELINE_CAP = 0.05f
 
     /** Smoothing of the foam reading, in seconds. */
     const val FOAM_SMOOTHING_SECONDS = 0.3f
+
+    /**
+     * Soap only has to be CONFIRMED once: after foam has been seen (on sharp frames) for
+     * this many seconds in total, the hand is "soaped" for the rest of the alarm. From
+     * then on only rubbing fills the ring.
+     */
+    const val FOAM_CONFIRM_SECONDS = 2f
+
+    /**
+     * The confirmation timer drains by this many seconds per second while sharp frames show
+     * NO soap. A dry hand that reads "soapy" on a stray frame now and then never adds up
+     * to a confirmation; real lather (seen most of the time) does.
+     */
+    const val FOAM_CONFIRM_LEAK_PER_SECOND = 0.5f
 
     // ---------------------------------------------------------------------------------
     // Rubbing = repeated back-and-forth of the fingers relative to the palm.

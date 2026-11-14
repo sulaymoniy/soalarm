@@ -1,18 +1,20 @@
 package com.sulaymoniy.soalarm
 
 import com.sulaymoniy.soalarm.ring.FoamDetector
+import com.sulaymoniy.soalarm.ring.FoamResult
 import com.sulaymoniy.soalarm.ring.HandMask
 import com.sulaymoniy.soalarm.ring.Pt
+import com.sulaymoniy.soalarm.ring.WashConfig
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.random.Random
 
 /**
  * Synthetic camera frames: a skin-coloured hand on different backgrounds, with or
- * without a white soap bar or bubbly lather. Foam must be found only on the hand and
- * only when it looks bubbly.
+ * without a soap bar or lather. Soap must be found only on the hand, only when it
+ * looks bubbly, and only on sharp frames.
  */
 class FoamDetectorTest {
     private val w = 640
@@ -23,11 +25,11 @@ class FoamDetectorTest {
     private fun rgb(r: Int, g: Int, b: Int) =
         (0xFF shl 24) or (r.coerceIn(0, 255) shl 16) or (g.coerceIn(0, 255) shl 8) or b.coerceIn(0, 255)
 
-    /** Builds a frame: [background], then skin on (and a bit around) the hand, then [extra]. */
+    /** Builds a frame: [background], then skin on (and a bit around) the hand, then [extra] layers. */
     private fun frame(
         seed: Int,
         background: (x: Int, y: Int, rnd: Random) -> Int,
-        extra: ((x: Int, y: Int, rnd: Random) -> Int?)? = null,
+        vararg extra: (px: IntArray, rnd: Random) -> Unit,
     ): IntArray {
         val rnd = Random(seed)
         val px = IntArray(w * h) { background(it % w, it / w, rnd) }
@@ -48,9 +50,7 @@ class FoamDetectorTest {
                 px[i] = rgb(190 + n, 140 + n, 112 + n)
             }
         }
-        if (extra != null) {
-            for (y in 0 until h) for (x in 0 until w) extra(x, y, rnd)?.let { px[y * w + x] = it }
-        }
+        extra.forEach { it(px, rnd) }
         return px
     }
 
@@ -59,71 +59,154 @@ class FoamDetectorTest {
         rgb(236 + n, 236 + n, 234 + n)
     }
 
-    private val soapBar: (Int, Int, Random) -> Int? = { x, y, rnd ->
-        if (x in 280..360 && y in 230..285) {
+    private fun rect(px: IntArray, rnd: Random, x0: Int, x1: Int, y0: Int, y1: Int, r: Int, g: Int, b: Int) {
+        for (y in y0..y1) for (x in x0..x1) {
             val n = rnd.nextInt(-2, 3)
-            rgb(242 + n, 240 + n, 236 + n)
-        } else {
-            null
+            px[y * w + x] = rgb(r + n, g + n, b + n)
         }
     }
 
-    /** Lather: bright grey-white with a dense pattern of small bubbles and darker gaps. */
-    private val lather: (Int, Int, Random) -> Int? = { x, y, rnd ->
-        if (hypot(x - palm.x, y - palm.y) <= 60f) {
-            val v = (235 + 20 * cos(x * 1.6) * cos(y * 1.6)).toInt() + rnd.nextInt(-3, 4)
-            rgb(v, v, v + 3)
-        } else {
-            null
+    private val whiteSoapBar: (IntArray, Random) -> Unit = { px, rnd -> rect(px, rnd, 280, 360, 230, 285, 242, 240, 236) }
+    private val orangeSoapBar: (IntArray, Random) -> Unit = { px, rnd -> rect(px, rnd, 280, 360, 230, 285, 235, 120, 40) }
+
+    /** Small bubbles: a bright centre with a light ring, ~3 px across. */
+    private fun bubble(px: IntArray, x: Int, y: Int) {
+        for (dy in -1..1) for (dx in -1..1) px[(y + dy) * w + x + dx] = rgb(232, 229, 227)
+        px[y * w + x] = rgb(252, 251, 250)
+    }
+
+    /** Bar-soap lather: a thin soap film on the skin with SPARSE small bubbles (~1 per 8x8 px). */
+    private val thinLather: (IntArray, Random) -> Unit = { px, rnd ->
+        for (y in 0 until h) for (x in 0 until w) {
+            if (hypot(x - palm.x, y - palm.y) > 60f) continue
+            val n = rnd.nextInt(-4, 5)
+            px[y * w + x] = rgb(205 + n, 172 + n, 152 + n) // skin seen through a soapy film
+        }
+        var y = (palm.y - 56).toInt()
+        while (y < palm.y + 56) {
+            var x = (palm.x - 56).toInt()
+            while (x < palm.x + 56) {
+                val bx = x + rnd.nextInt(0, 3)
+                val by = y + rnd.nextInt(0, 3)
+                if (hypot(bx - palm.x, by - palm.y) < 56f) bubble(px, bx, by)
+                x += 8
+            }
+            y += 8
         }
     }
 
-    /** Feeds [dryFrames] skin-only frames (learning skin colour), then returns coverage of [last]. */
-    private fun coverage(dryFrames: Int, last: IntArray): Float {
-        val detector = FoamDetector()
+    /** Thick white foam: grey-white film packed with bubbles (~1 per 5x5 px). */
+    private val thickLather: (IntArray, Random) -> Unit = { px, rnd ->
+        for (y in 0 until h) for (x in 0 until w) {
+            if (hypot(x - palm.x, y - palm.y) > 60f) continue
+            val n = rnd.nextInt(-3, 4)
+            px[y * w + x] = rgb(212 + n, 212 + n, 216 + n)
+        }
+        var y = (palm.y - 56).toInt()
+        while (y < palm.y + 56) {
+            var x = (palm.x - 56).toInt()
+            while (x < palm.x + 56) {
+                if (hypot(x - palm.x, y - palm.y) < 56f) bubble(px, x + rnd.nextInt(0, 2), y + rnd.nextInt(0, 2))
+                x += 5
+            }
+            y += 5
+        }
+    }
+
+    private fun blur(px: IntArray, r: Int = 2): IntArray {
+        val out = IntArray(px.size)
+        for (y in 0 until h) for (x in 0 until w) {
+            var rs = 0; var gs = 0; var bs = 0; var n = 0
+            for (dy in -r..r) for (dx in -r..r) {
+                val xx = (x + dx).coerceIn(0, w - 1)
+                val yy = (y + dy).coerceIn(0, h - 1)
+                val c = px[yy * w + xx]
+                rs += (c shr 16) and 0xFF; gs += (c shr 8) and 0xFF; bs += c and 0xFF; n++
+            }
+            out[y * w + x] = rgb(rs / n, gs / n, bs / n)
+        }
+        return out
+    }
+
+    /** Feeds [dryFrames] sharp skin-only frames (learning skin colour), then analyses [last]. */
+    private fun analyze(dryFrames: Int, last: IntArray, detector: FoamDetector = FoamDetector()): FoamResult {
         val dry = frame(1, whiteSink)
         repeat(dryFrames) { detector.analyze(dry, w, h, listOf(hand)) }
         var result = detector.analyze(last, w, h, listOf(hand))
-        // If skin wasn't learned yet (no dry frames), keep showing the same frame.
         var guard = 0
         while (!result.skinReady && guard++ < 40) result = detector.analyze(last, w, h, listOf(hand))
         assertTrue("skin colour learned", result.skinReady)
-        return result.coverage
+        return result
+    }
+
+    // ---- Must NOT count as soap ---------------------------------------------------------
+
+    @Test
+    fun dryHandOverWhiteSinkIsNotSoap() {
+        val r = analyze(12, frame(2, whiteSink))
+        assertTrue("coverage=${r.coverage}", r.coverage < 0.01f)
     }
 
     @Test
-    fun dryHandOverWhiteSinkIsNotFoam() {
-        val c = coverage(12, frame(2, whiteSink))
-        assertTrue("coverage=$c", c < 0.02f)
+    fun dryHandHoldingWhiteSoapBarIsNotSoap() {
+        val r = analyze(12, frame(3, whiteSink, whiteSoapBar))
+        assertTrue("coverage=${r.coverage}", r.coverage < 0.01f)
     }
 
     @Test
-    fun dryHandHoldingWhiteSoapBarIsNotFoam() {
-        val c = coverage(12, frame(3, whiteSink, soapBar))
-        assertTrue("coverage=$c", c < 0.03f)
+    fun orangeSoapBarIsCutOutAndDoesNotSpoilSkinColour() {
+        val detector = FoamDetector()
+        // The bar is in the hand from the very first frame, while skin colour is learned.
+        val r = analyze(0, frame(4, whiteSink, orangeSoapBar), detector)
+        assertTrue("bar share=${r.barShare}", r.barShare > 0.1f)
+        assertTrue("coverage=${r.coverage}", r.coverage < 0.01f)
+        assertTrue("skin saturation=${detector.skinS}", detector.skinS in 0.3f..0.5f)
     }
 
     @Test
-    fun whiteTowelOrTilesBehindTheHandAreIgnored() {
-        // Bubbly-looking white texture everywhere EXCEPT on the hand.
+    fun bubblyWhiteTowelBehindTheHandIsIgnored() {
         val towel: (Int, Int, Random) -> Int = { x, y, rnd ->
-            val v = (235 + 20 * cos(x * 1.6) * cos(y * 1.6)).toInt() + rnd.nextInt(-3, 4)
+            val v = if ((x % 5 == 0) && (y % 5 == 0)) 252 else 220 + rnd.nextInt(-3, 4)
             rgb(v, v, v)
         }
-        val c = coverage(12, frame(4, towel))
-        assertTrue("coverage=$c", c < 0.02f)
+        val r = analyze(12, frame(5, towel))
+        assertTrue("coverage=${r.coverage}", r.coverage < 0.01f)
+    }
+
+    // ---- MUST count as soap -----------------------------------------------------------
+
+    @Test
+    fun thinBarSoapLatherIsSoap() {
+        val r = analyze(12, frame(6, whiteSink, thinLather))
+        assertTrue("sharp", r.sharp)
+        assertTrue("coverage=${r.coverage}", r.coverage > WashConfig.FOAM_COVERAGE_THRESHOLD + WashConfig.FOAM_BASELINE_CAP)
     }
 
     @Test
-    fun latherOnTheHandIsFoam() {
-        val c = coverage(12, frame(5, whiteSink, lather))
-        assertTrue("coverage=$c", c > 0.2f)
+    fun thickFoamIsSoap() {
+        val r = analyze(12, frame(7, whiteSink, thickLather))
+        assertTrue("coverage=${r.coverage}", r.coverage > 0.15f)
+    }
+
+    @Test
+    fun latherWhileHoldingOrangeBarIsStillSoap() {
+        val r = analyze(12, frame(8, whiteSink, thinLather, orangeSoapBar))
+        assertTrue("coverage=${r.coverage}", r.coverage > WashConfig.FOAM_COVERAGE_THRESHOLD)
     }
 
     @Test
     fun latherFromTheFirstFrameIsStillFound() {
-        // Skin colour is learned from the visible skin around the lather.
-        val c = coverage(0, frame(6, whiteSink, lather))
-        assertTrue("coverage=$c", c > 0.2f)
+        val r = analyze(0, frame(9, whiteSink, thinLather))
+        assertTrue("coverage=${r.coverage}", r.coverage > WashConfig.FOAM_COVERAGE_THRESHOLD)
+    }
+
+    // ---- Blur ---------------------------------------------------------------------------
+
+    @Test
+    fun motionBlurredFrameIsFlaggedNotJudged() {
+        val detector = FoamDetector()
+        analyze(12, frame(10, whiteSink, thinLather), detector) // sharp frames set the reference
+        val blurred = detector.analyze(blur(frame(11, whiteSink, thinLather)), w, h, listOf(hand))
+        assertFalse("sharpness=${blurred.sharpness} ref=${blurred.sharpnessRef}", blurred.sharp)
     }
 }

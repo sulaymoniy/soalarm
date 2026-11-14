@@ -2,6 +2,7 @@ package com.sulaymoniy.soalarm.ring
 
 import android.util.Log
 import android.util.Size
+import android.widget.Toast
 import androidx.camera.core.AspectRatio
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -28,6 +29,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -62,6 +64,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.sulaymoniy.soalarm.R
@@ -118,13 +121,22 @@ fun HandWashScreen(
         }
     }
     val executor: ExecutorService = remember { Executors.newSingleThreadExecutor() }
+    val mainExecutor = remember { ContextCompat.getMainExecutor(context) }
     val analyzer: HandWashAnalyzer? = remember {
         try {
             HandWashAnalyzer(
                 context,
                 debug = testMode,
+                // During a real alarm, a confirmed soap check survives the screen being recreated.
+                initiallySoaped = !testMode && RingState.isSoaped(context),
                 onState = { stateFlow.value = it },
+                onSoaped = { if (!testMode) RingState.markSoaped(context) },
                 onDebugFrame = if (testMode) ({ debugFlow.value = it }) else null,
+                onSaved = if (testMode) {
+                    { msg -> mainExecutor.execute { Toast.makeText(context, msg, Toast.LENGTH_LONG).show() } }
+                } else {
+                    null
+                },
             )
         } catch (e: Exception) {
             Log.e("HandWashScreen", "Hand tracker could not start", e)
@@ -245,6 +257,10 @@ fun HandWashScreen(
             if (testMode) {
                 Spacer(Modifier.padding(top = 8.dp))
                 DebugValues(state)
+                Spacer(Modifier.padding(top = 8.dp))
+                FilledTonalButton(onClick = { analyzer.requestSave() }) {
+                    Text("Save frame")
+                }
             }
 
             Spacer(Modifier.weight(1f))
@@ -304,20 +320,33 @@ private fun HintCard(state: WashState) {
     val emoji = when (state.hint) {
         WashHint.ShowHand -> "🖐️"
         WashHint.AddSoap -> "🧼"
+        WashHint.CheckingSoap -> "🫧"
         WashHint.RubHand -> "👋"
         WashHint.KeepGoing -> "💧"
     }
-    Text(
-        "$emoji  ${state.hint.text}",
-        style = MaterialTheme.typography.headlineSmall,
-        color = Color.White,
-        fontWeight = FontWeight.Bold,
-        textAlign = TextAlign.Center,
-        modifier = Modifier
+    Column(
+        Modifier
             .fillMaxWidth()
             .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(20.dp))
             .padding(16.dp),
-    )
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            "$emoji  ${state.hint.text}",
+            style = MaterialTheme.typography.headlineSmall,
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+        )
+        if (state.soaped) {
+            Text(
+                "✅ Soap confirmed. Now just rub.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.85f),
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+    }
 }
 
 /** Live numbers and pass/fail per condition (test mode only). */
@@ -329,8 +358,15 @@ private fun DebugValues(state: WashState) {
     val lines = listOf(
         "${mark(d.handsVisible > 0)} Hand: ${d.handsVisible} visible",
         if (d.skinReady) "✅ Skin colour learned" else "⏳ Learning skin colour…",
-        "${mark(d.foamNow)} Foam ${pct(d.foamCoverage)}  (before ${pct(d.foamBaseline)}, " +
+        when {
+            d.handsVisible == 0 -> "➖ Sharpness: no hand"
+            d.sharp -> "✅ Sharp"
+            else -> "💨 Blurry (soap check skipped)"
+        },
+        "${mark(d.foamNow)} Soap ${pct(d.foamCoverage)}  (before ${pct(d.foamBaseline)}, " +
             "needs +${pct(WashConfig.FOAM_COVERAGE_THRESHOLD)})",
+        "${mark(state.soaped)} Soap confirmed " +
+            String.format(Locale.US, "%.1f / %.0f s", d.foamSeconds, WashConfig.FOAM_CONFIRM_SECONDS),
         "${mark(d.rubbing)} Rubbing " + String.format(Locale.US, "%.1f Hz, amp %.3f", d.rubHz, d.rubAmplitude) +
             "  (needs ${WashConfig.RUB_MIN_HZ}–${WashConfig.RUB_MAX_HZ} Hz, ≥${WashConfig.RUB_MIN_AMPLITUDE})",
         "${mark(state.washingNow)} Counting: " + String.format(Locale.US, "%.1f / %.0f s", state.washSeconds, WashConfig.WASH_SECONDS_REQUIRED),
@@ -346,7 +382,7 @@ private fun DebugValues(state: WashState) {
             Text(it, color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
         }
         Text(
-            "Blue = hand mask · Green = foam · Yellow = bubbles",
+            "Blue = hand · Orange = soap bar (ignored) · Green = soapy · Yellow = bubbles",
             color = Color.White.copy(alpha = 0.75f),
             fontSize = 11.sp,
         )
