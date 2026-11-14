@@ -1,51 +1,62 @@
 package com.sulaymoniy.soalarm.ring
 
 import kotlin.math.PI
-import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.hypot
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 /** A 2D point in image pixels. */
 data class Pt(val x: Float, val y: Float)
 
 enum class WashHint(val text: String) {
     ShowHand("Show your hand to the camera"),
-    RubHand("Rub your hand"),
     AddSoap("Add soap"),
+    RubHand("Rub your hand"),
     KeepGoing("Keep going!"),
 }
 
+/** Live values for the test-mode overlay. */
+data class WashDebug(
+    val handsVisible: Int = 0,
+    val skinReady: Boolean = false,
+    val foamCoverage: Float = 0f,
+    val foamBaseline: Float = 0f,
+    val foamNow: Boolean = false,
+    val rubbing: Boolean = false,
+    val rubHz: Float = 0f,
+    val rubAmplitude: Float = 0f,
+)
+
 data class WashState(
     val washSeconds: Float = 0f,
-    val foamSeconds: Float = 0f,
     val hint: WashHint = WashHint.ShowHand,
     val washingNow: Boolean = false,
-    val foamNow: Boolean = false,
     val passed: Boolean = false,
     val frames: Long = 0,
+    val debug: WashDebug = WashDebug(),
 ) {
-    val washProgress: Float get() = (washSeconds / WashConfig.WASH_SECONDS_REQUIRED).coerceIn(0f, 1f)
-    val foamProgress: Float get() = (foamSeconds / WashConfig.FOAM_SECONDS_REQUIRED).coerceIn(0f, 1f)
+    val progress: Float get() = (washSeconds / WashConfig.WASH_SECONDS_REQUIRED).coerceIn(0f, 1f)
 }
 
 /**
- * Decides, frame by frame, whether the user is washing.
+ * Decides, frame by frame, whether the user is washing with soap.
  *
- * ONE hand is enough (the other may be holding the phone):
- * - One hand: its fingers must move relative to its own palm (rubbing, opening and
- *   closing, thumb rubbing the palm). Positions are measured in the hand's own frame
- *   (centred on the palm, rotated and scaled with it), so moving, tilting or zooming
- *   the phone does not count as washing.
- * - Two hands close together sliding against each other also count.
+ * The ring only fills while BOTH are true at the same moment:
+ * - FOAM: new lather covers a clear part of the hand (see [FoamDetector]), measured
+ *   against the hand's own lowest reading, so white skin highlights or a dry hand
+ *   never count.
+ * - RUBBING: a sustained back-and-forth of the fingers relative to the palm at
+ *   1-4 times per second. Positions are measured in the hand's own frame (centred on
+ *   the palm, rotated and scaled with it), so waving the whole hand, moving or shaking
+ *   the phone, or holding an object still doesn't count.
  *
- * Progress only grows while washing is detected. If the hand is briefly lost,
- * progress pauses and continues later; it never resets. Soap is counted while
- * washing and the foam share around the visible hand(s) is above
- * [WashConfig.FOAM_PIXEL_THRESHOLD].
+ * One hand is enough. Two hands sliding against each other also count. If the hand is
+ * briefly lost, progress pauses and continues later; it never resets.
  *
  * Pure Kotlin (no Android types), so it can be unit tested.
  */
@@ -54,177 +65,225 @@ class HandWashTracker {
     private var frames = 0L
 
     private val tracks = mutableListOf<Track>()
+    private val pairRhythm = Rhythm()
+    private var pairSeen = -1L
     private var prevPair: Pair<Palm, Palm>? = null
 
-    /** Smoothed "rub score": 1.0 = exactly at the threshold. */
-    private var smoothedScore = 0f
+    private var foamSmoothed = -1f
+    private var foamBaselineMin = Float.MAX_VALUE
 
     private var washSeconds = 0f
-    private var foamSeconds = 0f
 
-    fun update(timestampMs: Long, hands: List<List<Pt>>, foamRatio: Float): WashState {
+    fun update(timestampMs: Long, hands: List<List<Pt>>, foamCoverage: Float, skinReady: Boolean = true): WashState {
         frames++
         val dt = if (lastTs < 0) 0f else ((timestampMs - lastTs) / 1000f).coerceIn(0f, 0.5f)
         lastTs = timestampMs
 
         val palms = hands.filter { it.size >= 21 }.map { Palm.of(it) }
-        val handVisible = palms.isNotEmpty()
+        val visible = palms.isNotEmpty()
 
-        // Signal 1: fingers moving relative to their own palm (works with one hand).
-        val fingerSpeed = updateTracks(timestampMs, palms)
-        // Signal 2: two hands close together sliding against each other.
-        val pairSpeed = if (palms.size >= 2) twoHandSpeed(palms[0], palms[1], dt) else {
+        // ---- Foam: smoothed, compared with the lowest level seen ("before" washing).
+        var foamNow = false
+        var baseline = 0f
+        if (visible && skinReady) {
+            foamSmoothed = if (foamSmoothed < 0f) foamCoverage else {
+                val alpha = 1f - exp(-dt / WashConfig.FOAM_SMOOTHING_SECONDS)
+                foamSmoothed + (foamCoverage - foamSmoothed) * alpha
+            }
+            foamBaselineMin = min(foamBaselineMin, foamSmoothed)
+            baseline = min(foamBaselineMin, WashConfig.FOAM_BASELINE_CAP)
+            foamNow = foamSmoothed - baseline >= WashConfig.FOAM_COVERAGE_THRESHOLD
+        }
+
+        // ---- Rubbing: rhythmic finger motion (one hand) or hands sliding (two hands).
+        var best = RhythmResult.NONE
+        for (palm in palms) {
+            val r = trackFor(timestampMs, palm).rhythm.add(timestampMs, palm.fingerSignals())
+            best = RhythmResult.better(best, r)
+        }
+        tracks.removeAll { timestampMs - it.lastSeen > WashConfig.HAND_TRACK_TIMEOUT_MS }
+        if (palms.size >= 2) {
+            pairSignals(palms[0], palms[1])?.let { best = RhythmResult.better(best, pairRhythm.add(timestampMs, it)) }
+            pairSeen = timestampMs
+        } else {
             prevPair = null
-            0f
+            if (pairSeen >= 0 && timestampMs - pairSeen > WashConfig.HAND_TRACK_TIMEOUT_MS) pairRhythm.clear()
         }
+        val rubbing = visible && best.ok
 
-        val score = max(
-            fingerSpeed / WashConfig.SINGLE_HAND_RUB_THRESHOLD,
-            pairSpeed / WashConfig.RUB_SPEED_THRESHOLD,
-        )
-        if (dt > 0f) {
-            val alpha = 1f - exp(-dt / WashConfig.RUB_SMOOTHING_SECONDS)
-            smoothedScore += ((if (handVisible) score else 0f) - smoothedScore) * alpha
-        }
-
-        val rubbing = handVisible && smoothedScore >= 1f
-        val washingNow = rubbing
-        val foamNow = washingNow && foamRatio >= WashConfig.FOAM_PIXEL_THRESHOLD
-
+        val washingNow = visible && foamNow && rubbing
         if (washingNow) washSeconds = (washSeconds + dt).coerceAtMost(WashConfig.WASH_SECONDS_REQUIRED)
-        if (foamNow) foamSeconds = (foamSeconds + dt).coerceAtMost(WashConfig.FOAM_SECONDS_REQUIRED)
 
-        val soapDone = foamSeconds >= WashConfig.FOAM_SECONDS_REQUIRED
         val hint = when {
-            !handVisible -> WashHint.ShowHand
+            !visible -> WashHint.ShowHand
+            !foamNow -> WashHint.AddSoap
             !rubbing -> WashHint.RubHand
-            !soapDone && !foamNow -> WashHint.AddSoap
             else -> WashHint.KeepGoing
         }
         return WashState(
             washSeconds = washSeconds,
-            foamSeconds = foamSeconds,
             hint = hint,
             washingNow = washingNow,
-            foamNow = foamNow,
-            passed = washSeconds >= WashConfig.WASH_SECONDS_REQUIRED && soapDone,
+            passed = washSeconds >= WashConfig.WASH_SECONDS_REQUIRED,
             frames = frames,
+            debug = WashDebug(
+                handsVisible = palms.size,
+                skinReady = skinReady,
+                foamCoverage = max(foamSmoothed, 0f),
+                foamBaseline = baseline,
+                foamNow = foamNow,
+                rubbing = rubbing,
+                rubHz = best.hz,
+                rubAmplitude = best.amplitude,
+            ),
         )
     }
 
-    // ---- Signal 1: fingers vs. palm, per hand -------------------------------------------
+    // ---- Following hands across frames -----------------------------------------------
 
-    /** Follows each hand across frames and returns the fastest finger movement (hand-lengths/s). */
-    private fun updateTracks(ts: Long, palms: List<Palm>): Float {
-        tracks.removeAll { ts - it.lastSeen > WashConfig.HAND_TRACK_TIMEOUT_MS }
-
-        var best = 0f
-        val used = mutableSetOf<Track>()
-        for (palm in palms) {
-            // Same hand as before = the nearest track, if it's not too far away.
-            val track = tracks
-                .filter { it !in used && dist(it.center, palm.center) < 2f * palm.size }
-                .minByOrNull { dist(it.center, palm.center) }
-                ?: Track().also { tracks.add(it) }
-            used += track
-            track.center = palm.center
-            track.lastSeen = ts
-            track.history.addLast(ts to palm.localFingers)
-            while (track.history.size > 2 && ts - track.history.first().first > WashConfig.FINGER_MOTION_WINDOW_MS * 3) {
-                track.history.removeFirst()
-            }
-            best = max(best, track.fingerSpeed(ts))
-        }
-        return best
+    private class Track(var center: Pt, var lastSeen: Long) {
+        val rhythm = Rhythm()
     }
 
-    private class Track {
-        var center = Pt(0f, 0f)
-        var lastSeen = 0L
-        val history = ArrayDeque<Pair<Long, List<Pt>>>()
-
-        /**
-         * Average finger movement in the hand's own frame, compared with how the hand looked
-         * about [WashConfig.FINGER_MOTION_WINDOW_MS] ago. Using a short window (instead of
-         * frame-to-frame) keeps tiny detection jitter from adding up to fake motion.
-         */
-        fun fingerSpeed(now: Long): Float {
-            val (pastTs, past) = history.lastOrNull { now - it.first >= WashConfig.FINGER_MOTION_WINDOW_MS }
-                ?: return 0f
-            val current = history.last().second
-            var sum = 0f
-            for (i in current.indices) sum += dist(current[i], past[i])
-            val seconds = (now - pastTs) / 1000f
-            return if (seconds <= 0f) 0f else sum / current.size / seconds
-        }
+    private fun trackFor(ts: Long, palm: Palm): Track {
+        val track = tracks
+            .filter { it.lastSeen != ts && hypot(it.center.x - palm.center.x, it.center.y - palm.center.y) < 2f * palm.size }
+            .minByOrNull { hypot(it.center.x - palm.center.x, it.center.y - palm.center.y) }
+            ?: Track(palm.center, ts).also { tracks.add(it) }
+        track.center = palm.center
+        track.lastSeen = ts
+        return track
     }
 
-    // ---- Signal 2: two hands sliding against each other ----------------------------------
-
-    private fun twoHandSpeed(first: Palm, second: Palm, dt: Float): Float {
+    /** Two hands close together: their relative position and angle, in hand-lengths. */
+    private fun pairSignals(first: Palm, second: Palm): FloatArray? {
         // MediaPipe may swap the order of hands between frames: match by position.
         var a = first
         var b = second
-        val prev = prevPair
-        if (prev != null &&
-            dist(a.center, prev.first.center) + dist(b.center, prev.second.center) >
-            dist(a.center, prev.second.center) + dist(b.center, prev.first.center)
-        ) {
-            a = second; b = first
+        prevPair?.let { (pa, pb) ->
+            if (dist(a.center, pa.center) + dist(b.center, pb.center) >
+                dist(a.center, pb.center) + dist(b.center, pa.center)
+            ) {
+                a = second; b = first
+            }
         }
         prevPair = a to b
-
         val size = (a.size + b.size) / 2f
-        val close = dist(a.center, b.center) < WashConfig.HANDS_CLOSE_FACTOR * size
-        if (prev == null || !close || dt <= 0f) return 0f
+        if (dist(a.center, b.center) >= WashConfig.HANDS_CLOSE_FACTOR * size) return null
+        // Camera shake moves both hands equally, so their difference cancels it out.
+        var twist = a.angle - b.angle
+        while (twist > PI) twist -= (2 * PI).toFloat()
+        while (twist < -PI) twist += (2 * PI).toFloat()
+        return floatArrayOf((a.center.x - b.center.x) / size, (a.center.y - b.center.y) / size, twist)
+    }
 
-        // Relative offset change cancels out camera shake that moves both hands equally.
-        val relNow = Pt(a.center.x - b.center.x, a.center.y - b.center.y)
-        val relPrev = Pt(prev.first.center.x - prev.second.center.x, prev.first.center.y - prev.second.center.y)
-        val slide = dist(relNow, relPrev) / size
-        val twist = abs(angleDiff(a.angle - b.angle, prev.first.angle - prev.second.angle))
-        return (slide + 0.5f * twist) / dt
+    // ---- Rhythm detection ---------------------------------------------------------------
+
+    class RhythmResult(val ok: Boolean, val hz: Float, val amplitude: Float) {
+        companion object {
+            val NONE = RhythmResult(false, 0f, 0f)
+            fun better(a: RhythmResult, b: RhythmResult): RhythmResult = when {
+                a.ok != b.ok -> if (a.ok) a else b
+                else -> if (a.amplitude >= b.amplitude) a else b
+            }
+        }
+    }
+
+    /**
+     * Keeps [WashConfig.RUB_WINDOW_MS] of a few motion signals and checks whether any of
+     * them goes back and forth: enough amplitude, 1-4 cycles per second, several reversals.
+     */
+    private class Rhythm {
+        private val times = ArrayDeque<Long>()
+        private val values = ArrayDeque<FloatArray>()
+
+        fun clear() {
+            times.clear(); values.clear()
+        }
+
+        fun add(ts: Long, signals: FloatArray): RhythmResult {
+            times.addLast(ts)
+            values.addLast(signals)
+            while (times.size > 2 && ts - times.first() > WashConfig.RUB_WINDOW_MS) {
+                times.removeFirst(); values.removeFirst()
+            }
+            return analyze()
+        }
+
+        private fun analyze(): RhythmResult {
+            val span = (times.last() - times.first()) / 1000f
+            if (span < WashConfig.RUB_WINDOW_MS / 1000f * 0.8f || times.size < 8) return RhythmResult.NONE
+            var best = RhythmResult.NONE
+            for (c in values.first().indices) {
+                var mean = 0f
+                for (v in values) mean += v[c]
+                mean /= values.size
+                var variance = 0f
+                for (v in values) variance += (v[c] - mean) * (v[c] - mean)
+                val std = sqrt(variance / values.size)
+                // Count direction changes with a dead band, so jitter isn't counted.
+                val band = max(0.35f * std, WashConfig.RUB_MIN_AMPLITUDE * 0.5f)
+                var side = 0
+                var reversals = 0
+                for (v in values) {
+                    val d = v[c] - mean
+                    val now = if (d > band) 1 else if (d < -band) -1 else side
+                    if (now != side && side != 0) reversals++
+                    side = now
+                }
+                val hz = reversals / 2f / span
+                val ok = std >= WashConfig.RUB_MIN_AMPLITUDE &&
+                    reversals >= WashConfig.RUB_MIN_REVERSALS &&
+                    hz >= WashConfig.RUB_MIN_HZ && hz <= WashConfig.RUB_MAX_HZ
+                best = RhythmResult.better(best, RhythmResult(ok, hz, std))
+            }
+            return best
+        }
     }
 
     // ---- Geometry -------------------------------------------------------------------------
 
-    private class Palm(val center: Pt, val size: Float, val angle: Float, val localFingers: List<Pt>) {
+    private class Palm(val center: Pt, val size: Float, val angle: Float, private val lm: List<Pt>) {
+        /**
+         * Finger positions in the hand's own frame (centred on the palm, rotated with it,
+         * in hand-lengths): thumb x/y, fingers x/y, and how far the fingers reach out.
+         * Whole-hand movement, tilting and zooming leave these unchanged.
+         */
+        fun fingerSignals(): FloatArray {
+            val c = cos(-angle)
+            val s = sin(-angle)
+            fun local(i: Int): Pt {
+                val dx = lm[i].x - center.x
+                val dy = lm[i].y - center.y
+                return Pt((dx * c - dy * s) / size, (dx * s + dy * c) / size)
+            }
+            var tx = 0f; var ty = 0f
+            for (i in THUMB) { val p = local(i); tx += p.x; ty += p.y }
+            var fx = 0f; var fy = 0f; var reach = 0f
+            for (i in FINGERS) { val p = local(i); fx += p.x; fy += p.y; reach += hypot(p.x, p.y) }
+            return floatArrayOf(
+                tx / THUMB.size, ty / THUMB.size,
+                fx / FINGERS.size, fy / FINGERS.size, reach / FINGERS.size,
+            )
+        }
+
         companion object {
             /** Wrist and finger bases: the stiff part of the hand. */
             private val PALM_POINTS = intArrayOf(0, 5, 9, 13, 17)
-
-            /** Thumb and finger joints that move when washing: tips plus the middle joints. */
-            private val FINGER_POINTS = intArrayOf(3, 4, 6, 8, 10, 12, 14, 16, 18, 20)
+            private val THUMB = intArrayOf(3, 4)
+            private val FINGERS = intArrayOf(6, 8, 10, 12, 14, 16, 18, 20)
 
             fun of(lm: List<Pt>): Palm {
                 val cx = PALM_POINTS.map { lm[it].x }.average().toFloat()
                 val cy = PALM_POINTS.map { lm[it].y }.average().toFloat()
-                val wrist = lm[0]
-                val middleBase = lm[9]
-                val size = dist(wrist, middleBase).coerceAtLeast(1f)
-                val angle = atan2(middleBase.y - wrist.y, middleBase.x - wrist.x)
-                // Express finger points in the hand's own frame: centred on the palm,
-                // rotated so the hand always "points" the same way, measured in hand-lengths.
-                val c = cos(-angle)
-                val s = sin(-angle)
-                val local = FINGER_POINTS.map { i ->
-                    val dx = lm[i].x - cx
-                    val dy = lm[i].y - cy
-                    Pt((dx * c - dy * s) / size, (dx * s + dy * c) / size)
-                }
-                return Palm(Pt(cx, cy), size, angle, local)
+                val size = dist(lm[0], lm[9]).coerceAtLeast(1f)
+                val angle = atan2(lm[9].y - lm[0].y, lm[9].x - lm[0].x)
+                return Palm(Pt(cx, cy), size, angle, lm)
             }
         }
     }
 
     private companion object {
         fun dist(a: Pt, b: Pt): Float = hypot(a.x - b.x, a.y - b.y)
-
-        fun angleDiff(a: Float, b: Float): Float {
-            var d = a - b
-            while (d > PI) d -= (2 * PI).toFloat()
-            while (d < -PI) d += (2 * PI).toFloat()
-            return d
-        }
     }
 }

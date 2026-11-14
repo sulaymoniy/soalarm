@@ -2,9 +2,11 @@ package com.sulaymoniy.soalarm.ring
 
 import android.util.Log
 import android.util.Size
+import androidx.camera.core.AspectRatio
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -20,7 +22,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -28,18 +29,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalIconButton
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.produceState
-import com.sulaymoniy.soalarm.alarm.RingState
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -47,48 +46,70 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size as GSize
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.sulaymoniy.soalarm.R
+import com.sulaymoniy.soalarm.alarm.RingState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.ceil
+import kotlin.math.max
 
 /**
- * Camera screen for the hand-washing check: live preview, a progress ring that
- * fills only while washing is detected, a soap meter and simple hints.
+ * Camera screen for the hand-washing check: live preview, a progress ring that fills
+ * only while a soapy hand is being rubbed, and one simple hint.
+ *
+ * [testMode] = "Test wash check" from the menu: no alarm, plus a debug overlay with the
+ * hand mask, foam pixels and live values, for tuning [WashConfig].
+ * [onCantWash] = show the "Can't wash right now?" button after a few minutes of ringing.
  */
 @Composable
-fun HandWashScreen(onPassed: () -> Unit, onCameraFailed: (String) -> Unit, onCantWash: () -> Unit) {
+fun HandWashScreen(
+    onPassed: () -> Unit,
+    onCameraFailed: (String) -> Unit,
+    onCantWash: (() -> Unit)? = null,
+    testMode: Boolean = false,
+) {
     val context = LocalContext.current
-    // After a few minutes of ringing, offer a harder math way out (no sink nearby, etc.).
-    val showCantWash by produceState(
-        RingState.ringingForMs(context) >= WashConfig.MANUAL_FALLBACK_AFTER_MS,
-    ) {
-        while (!value) {
-            delay(1_000)
-            value = RingState.ringingForMs(context) >= WashConfig.MANUAL_FALLBACK_AFTER_MS
-        }
-    }
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnPassed by rememberUpdatedState(onPassed)
     val currentOnFailed by rememberUpdatedState(onCameraFailed)
 
+    // After a few minutes of ringing, offer a harder math way out (no sink nearby, etc.).
+    val showCantWash by produceState(
+        onCantWash != null && RingState.ringingForMs(context) >= WashConfig.MANUAL_FALLBACK_AFTER_MS,
+    ) {
+        while (onCantWash != null && !value) {
+            delay(1_000)
+            value = RingState.ringingForMs(context) >= WashConfig.MANUAL_FALLBACK_AFTER_MS
+        }
+    }
+
     var useFrontCamera by rememberSaveable { mutableStateOf(true) }
+    var boundToFront by remember { mutableStateOf(true) }
     val stateFlow = remember { MutableStateFlow(WashState()) }
     val state by stateFlow.collectAsStateWithLifecycle()
+    val debugFlow = remember { MutableStateFlow<DebugFrame?>(null) }
+    val debugFrame by debugFlow.collectAsStateWithLifecycle()
 
     val previewView = remember {
         PreviewView(context).apply {
@@ -99,21 +120,25 @@ fun HandWashScreen(onPassed: () -> Unit, onCameraFailed: (String) -> Unit, onCan
     val executor: ExecutorService = remember { Executors.newSingleThreadExecutor() }
     val analyzer: HandWashAnalyzer? = remember {
         try {
-            HandWashAnalyzer(context) { stateFlow.value = it }
+            HandWashAnalyzer(
+                context,
+                debug = testMode,
+                onState = { stateFlow.value = it },
+                onDebugFrame = if (testMode) ({ debugFlow.value = it }) else null,
+            )
         } catch (e: Exception) {
             Log.e("HandWashScreen", "Hand tracker could not start", e)
             null
         }
     }
+    // Preview and analysis both use 4:3, so they see the same picture (the overlay lines up).
     val analysis = remember {
         ImageAnalysis.Builder()
             .setResolutionSelector(
                 ResolutionSelector.Builder()
+                    .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
                     .setResolutionStrategy(
-                        ResolutionStrategy(
-                            Size(640, 480),
-                            ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
-                        ),
+                        ResolutionStrategy(Size(640, 480), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER),
                     )
                     .build(),
             )
@@ -150,7 +175,17 @@ fun HandWashScreen(onPassed: () -> Unit, onCameraFailed: (String) -> Unit, onCan
                     return@LaunchedEffect
                 }
             }
-            val preview = Preview.Builder().build().also { it.surfaceProvider = previewView.surfaceProvider }
+            boundToFront = selector == CameraSelector.DEFAULT_FRONT_CAMERA
+            val preview = Preview.Builder()
+                .setResolutionSelector(
+                    ResolutionSelector.Builder()
+                        .setAspectRatioStrategy(
+                            AspectRatioStrategy(AspectRatio.RATIO_4_3, AspectRatioStrategy.FALLBACK_RULE_AUTO),
+                        )
+                        .build(),
+                )
+                .build()
+                .also { it.surfaceProvider = previewView.surfaceProvider }
             provider.unbindAll()
             provider.bindToLifecycle(lifecycleOwner, selector, preview, analysis)
         } catch (e: Exception) {
@@ -173,6 +208,8 @@ fun HandWashScreen(onPassed: () -> Unit, onCameraFailed: (String) -> Unit, onCan
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
 
+        if (testMode) DebugOverlay(debugFrame, mirrored = boundToFront)
+
         Column(
             Modifier
                 .fillMaxSize()
@@ -188,7 +225,7 @@ fun HandWashScreen(onPassed: () -> Unit, onCameraFailed: (String) -> Unit, onCan
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                 ) {
                     Text(
-                        "Wash your hand with soap to stop the alarm",
+                        if (testMode) "Test wash check (no alarm)" else "Wash your hand with soap to stop the alarm",
                         style = MaterialTheme.typography.titleMedium,
                         color = Color.White,
                         fontWeight = FontWeight.SemiBold,
@@ -205,11 +242,16 @@ fun HandWashScreen(onPassed: () -> Unit, onCameraFailed: (String) -> Unit, onCan
                 }
             }
 
+            if (testMode) {
+                Spacer(Modifier.padding(top = 8.dp))
+                DebugValues(state)
+            }
+
             Spacer(Modifier.weight(1f))
             ProgressRing(state)
             Spacer(Modifier.weight(1f))
 
-            if (showCantWash) {
+            if (showCantWash && onCantWash != null) {
                 TextButton(
                     onClick = onCantWash,
                     colors = ButtonDefaults.textButtonColors(contentColor = Color.White),
@@ -228,14 +270,14 @@ fun HandWashScreen(onPassed: () -> Unit, onCameraFailed: (String) -> Unit, onCan
 
 @Composable
 private fun ProgressRing(state: WashState) {
-    val progress by animateFloatAsState(state.washProgress, label = "wash")
+    val progress by animateFloatAsState(state.progress, label = "wash")
     val ringColor = if (state.washingNow) Color(0xFF4FC3F7) else Color(0xFFB0BEC5)
     val secondsLeft = ceil(WashConfig.WASH_SECONDS_REQUIRED - state.washSeconds).toInt().coerceAtLeast(0)
     Box(contentAlignment = Alignment.Center, modifier = Modifier.size(220.dp)) {
         Canvas(Modifier.fillMaxSize()) {
             val stroke = 18.dp.toPx()
             val inset = stroke / 2
-            val arcSize = GSize(size.width - stroke, size.height - stroke)
+            val arcSize = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke)
             drawCircle(Color.Black.copy(alpha = 0.35f))
             drawArc(
                 color = Color.White.copy(alpha = 0.25f),
@@ -259,44 +301,83 @@ private fun ProgressRing(state: WashState) {
 
 @Composable
 private fun HintCard(state: WashState) {
-    Column(
-        Modifier
+    val emoji = when (state.hint) {
+        WashHint.ShowHand -> "🖐️"
+        WashHint.AddSoap -> "🧼"
+        WashHint.RubHand -> "👋"
+        WashHint.KeepGoing -> "💧"
+    }
+    Text(
+        "$emoji  ${state.hint.text}",
+        style = MaterialTheme.typography.headlineSmall,
+        color = Color.White,
+        fontWeight = FontWeight.Bold,
+        textAlign = TextAlign.Center,
+        modifier = Modifier
             .fillMaxWidth()
             .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(20.dp))
             .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+    )
+}
+
+/** Live numbers and pass/fail per condition (test mode only). */
+@Composable
+private fun DebugValues(state: WashState) {
+    val d = state.debug
+    fun pct(v: Float) = String.format(Locale.US, "%.0f%%", v * 100)
+    fun mark(ok: Boolean) = if (ok) "✅" else "❌"
+    val lines = listOf(
+        "${mark(d.handsVisible > 0)} Hand: ${d.handsVisible} visible",
+        if (d.skinReady) "✅ Skin colour learned" else "⏳ Learning skin colour…",
+        "${mark(d.foamNow)} Foam ${pct(d.foamCoverage)}  (before ${pct(d.foamBaseline)}, " +
+            "needs +${pct(WashConfig.FOAM_COVERAGE_THRESHOLD)})",
+        "${mark(d.rubbing)} Rubbing " + String.format(Locale.US, "%.1f Hz, amp %.3f", d.rubHz, d.rubAmplitude) +
+            "  (needs ${WashConfig.RUB_MIN_HZ}–${WashConfig.RUB_MAX_HZ} Hz, ≥${WashConfig.RUB_MIN_AMPLITUDE})",
+        "${mark(state.washingNow)} Counting: " + String.format(Locale.US, "%.1f / %.0f s", state.washSeconds, WashConfig.WASH_SECONDS_REQUIRED),
+    )
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        val emoji = when (state.hint) {
-            WashHint.ShowHand -> "🖐️"
-            WashHint.RubHand -> "👋"
-            WashHint.AddSoap -> "🧼"
-            WashHint.KeepGoing -> "💧"
+        lines.forEach {
+            Text(it, color = Color.White, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
         }
         Text(
-            "$emoji  ${state.hint.text}",
-            style = MaterialTheme.typography.headlineSmall,
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
+            "Blue = hand mask · Green = foam · Yellow = bubbles",
+            color = Color.White.copy(alpha = 0.75f),
+            fontSize = 11.sp,
         )
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Text("Soap", color = Color.White, style = MaterialTheme.typography.labelLarge)
-            Spacer(Modifier.width(12.dp))
-            LinearProgressIndicator(
-                progress = { state.foamProgress },
-                modifier = Modifier
-                    .weight(1f)
-                    .height(8.dp),
-                color = Color.White,
-                trackColor = Color.White.copy(alpha = 0.25f),
-            )
-            Spacer(Modifier.width(12.dp))
-            Text(
-                if (state.foamProgress >= 1f) "✓" else "${(state.foamProgress * 100).toInt()}%",
-                color = Color.White,
-                style = MaterialTheme.typography.labelLarge,
-            )
+    }
+}
+
+/**
+ * Draws the hand mask, foam pixels and landmarks on top of the preview.
+ * The preview fills the screen (FILL_CENTER) and is mirrored for the front camera.
+ */
+@Composable
+private fun DebugOverlay(frame: DebugFrame?, mirrored: Boolean) {
+    Canvas(Modifier.fillMaxSize()) {
+        val f = frame ?: return@Canvas
+        val s = max(size.width / f.imageW, size.height / f.imageH)
+        val ox = (size.width - f.imageW * s) / 2f
+        val oy = (size.height - f.imageH * s) / 2f
+        scale(scaleX = if (mirrored) -1f else 1f, scaleY = 1f, pivot = center) {
+            f.overlay?.let { bmp ->
+                drawImage(
+                    image = bmp.asImageBitmap(),
+                    dstOffset = IntOffset((ox + f.overlayX * s).toInt(), (oy + f.overlayY * s).toInt()),
+                    dstSize = IntSize((bmp.width * f.overlayScale * s).toInt(), (bmp.height * f.overlayScale * s).toInt()),
+                    filterQuality = FilterQuality.None,
+                )
+            }
+            for (hand in f.hands) {
+                for (p in hand) {
+                    drawCircle(Color.White, radius = 3.dp.toPx(), center = Offset(ox + p.x * s, oy + p.y * s))
+                }
+            }
         }
     }
 }

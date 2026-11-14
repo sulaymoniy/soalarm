@@ -68,20 +68,31 @@ Works on Android 8.0 (API 26) through Android 17 (API 37).
 
 ## 3. Tuning the hand-washing check
 
+The ring only fills while **lather is on your hand AND you're rubbing**, both at the same time.
+
+**Test it without an alarm:** in the app, tap **⋮ → Test wash check**. The camera screen opens with a debug overlay:
+
+- **Blue** = the hand mask (only these pixels are checked for soap; the background is ignored)
+- **Green** = pixels counted as foam, **yellow** = bubble highlights
+- Live values with ✅/❌ for each condition: hand visible, skin colour learned, foam % (vs. your hand's "before" level), rubbing frequency and amplitude, seconds counted
+
 All the numbers are in one file:
 [`app/src/main/java/com/sulaymoniy/soalarm/ring/WashConfig.kt`](app/src/main/java/com/sulaymoniy/soalarm/ring/WashConfig.kt)
 
 | Constant | What it does |
 |---|---|
-| `WASH_SECONDS_REQUIRED` | Seconds of washing needed (20) |
-| `FOAM_SECONDS_REQUIRED` | Seconds of those that soap must be visible (5) |
-| `FOAM_PIXEL_THRESHOLD` | **Soap sensitivity.** Raise it if bare hands count as soapy; lower it if real foam isn't detected |
-| `SINGLE_HAND_RUB_THRESHOLD` | **One hand:** how much your fingers must move against your palm. Lower it if washing isn't detected; raise it if a still hand counts |
-| `RUB_SPEED_THRESHOLD` | **Two hands:** how hard you need to rub them together |
+| `WASH_SECONDS_REQUIRED` | Seconds of "soapy hand + rubbing" needed (20) |
+| `FOAM_COVERAGE_THRESHOLD` | **Soap sensitivity:** share of the hand that must be newly covered by foam (12%). Raise it if a dry hand passes; lower it if real lather isn't detected |
+| `BUBBLE_MIN_CONTRAST`, `FOAM_MIN_BUBBLES` | How "bubbly" foam must look. Raise them if smooth white things count; lower them if lather is missed |
+| `FOAM_BRIGHTER_THAN_SKIN`, `FOAM_SATURATION_VS_SKIN` | How much whiter than your own skin foam must be |
+| `RUB_MIN_HZ`, `RUB_MAX_HZ` | Rubbing rhythm: back-and-forth 1–4 times per second |
+| `RUB_MIN_AMPLITUDE` | How far your fingers must move against your palm. Lower it if real rubbing isn't detected |
 | `MANUAL_FALLBACK_AFTER_MS` | After the alarm has rung this long (3 min), a **"Can't wash right now? Solve math instead"** button appears |
 | `MANUAL_FALLBACK_PROBLEMS` | How many harder math problems that button asks for (5) |
 
-Good light helps. A plain background that isn't white helps the soap check.
+Good light helps. Show your hand to the camera dry first, then lather up: SoAlarm compares the foam with how your hand looked before.
+
+**App icon:** the source art is `design/app_icon_source.webp`. The launcher icon layers live in `app/src/main/res/mipmap-*`, and `design/play_store_icon_512.png` is the 512×512 icon for the Play Store listing.
 
 ## 4. Publish on Google Play (signed App Bundle)
 

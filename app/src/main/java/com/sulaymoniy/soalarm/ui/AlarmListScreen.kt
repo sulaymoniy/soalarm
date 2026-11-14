@@ -20,7 +20,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import android.content.Intent
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.IconButton
+import com.sulaymoniy.soalarm.ring.WashTestActivity
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -155,6 +160,7 @@ fun SoAlarmRoot(vm: AlarmViewModel = viewModel()) {
             onEdit = { editingId = it.id },
             onToggle = { alarm, on -> vm.setEnabled(alarm, on) { if (on) showRingsIn(it) } },
             onAllow = ::request,
+            onTestWash = { context.startActivity(Intent(context, WashTestActivity::class.java)) },
         )
     }
 }
@@ -178,7 +184,9 @@ private fun AlarmListScreen(
     onEdit: (Alarm) -> Unit,
     onToggle: (Alarm, Boolean) -> Unit,
     onAllow: (Need) -> Unit,
+    onTestWash: () -> Unit,
 ) {
+    var menuOpen by remember { mutableStateOf(false) }
     // Refresh "rings in" texts every 30 seconds.
     val now by produceState(ZonedDateTime.now()) {
         while (true) {
@@ -188,7 +196,25 @@ private fun AlarmListScreen(
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("SoAlarm", fontWeight = FontWeight.Bold) }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("SoAlarm", fontWeight = FontWeight.Bold) },
+                actions = {
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(painterResource(R.drawable.ic_more_vert), contentDescription = "Menu")
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Test wash check") },
+                            onClick = {
+                                menuOpen = false
+                                onTestWash()
+                            },
+                        )
+                    }
+                },
+            )
+        },
         floatingActionButton = {
             FloatingActionButton(onClick = onAdd) {
                 Icon(painterResource(R.drawable.ic_add), contentDescription = "Add alarm")

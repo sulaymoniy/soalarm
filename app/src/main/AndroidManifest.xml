@@ -58,6 +58,11 @@
             android:theme="@style/Theme.SoAlarm.Ring"
             tools:targetApi="27" />
 
+        <!-- "Test wash check" from the menu: the camera check without an alarm. -->
+        <activity
+            android:name=".ring.WashTestActivity"
+            android:exported="false" />
+
         <service
             android:name=".alarm.AlarmService"
             android:exported="false"
