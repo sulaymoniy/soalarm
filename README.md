@@ -1,3 +1,19 @@
+## Why I made SoAlarm
+
+As of 14 November 2026, I've used Alarmy for 648 days, and I still haven't become an early bird.
+
+The alarm went off every morning and I turned it off every morning, but the habit never stuck. Somewhere along the way I got really good at stopping alarms while still half asleep. My body learned the trick, and the rest of me just went back to sleep.
+
+So I decided to build my own alarm, with Claude's help. It's my first app ever.
+
+SoAlarm has one rule: **to stop the alarm, you have to wash your hand with soap.** Not tap a button or shake the phone. You actually have to get up, walk to the sink, turn on the water and lather up while the camera watches. One hand is enough, so you can hold the phone in the other.
+
+By the time you're done, cold water has hit your skin, you're standing up, and you're awake. There's no lying in bed to fake it.
+
+The alarm plays one song, *Orkney*. It starts quiet and slowly gets louder, so you wake up gently, but there's still only one way to make it stop.
+
+That's the whole idea. I hope it works for you better than everything else worked for me.
+
 # SoAlarm ⏰💧
 
 An Android alarm clock that only stops when you **wash your hand with soap for 20 seconds**. One hand is enough, so you can hold the phone in the other.
