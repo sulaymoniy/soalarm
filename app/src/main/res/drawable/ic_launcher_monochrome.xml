@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Themed-icon version: one colour, the drop is cut out of the clock face. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30.5,41.5 A10,10 0,0 1,44.5 31.5 Z M77.5,41.5 A10,10 0,0 0,63.5 31.5 Z" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M42,78 L38,83 M66,78 L70,83" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M54,34 A22,22 0,1 1,53.99 34 Z M54,41 C54,41 44.5,52.5 44.5,59.5 A9.5,9.5 0,0 0,63.5 59.5 C63.5,52.5 54,41 54,41 Z" />
+</vector>

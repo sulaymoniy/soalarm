@@ -1,0 +1,11 @@
+<resources>
+    <!-- Window theme. Compose draws everything else (see ui/theme/Theme.kt). -->
+    <style name="Theme.SoAlarm" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_light</item>
+    </style>
+
+    <!-- The alarm screen starts dark so a camera preview doesn't flash white. -->
+    <style name="Theme.SoAlarm.Ring" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>
