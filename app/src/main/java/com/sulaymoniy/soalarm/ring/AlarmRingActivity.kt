@@ -57,7 +57,7 @@ class AlarmRingActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
 
-        if (RingState.current(this) == null) {
+        if (!RingState.resumeIfInterrupted(this)) {
             // Opened from an old notification after the alarm was already stopped.
             finish()
             return

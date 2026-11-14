@@ -23,7 +23,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         // If an alarm is ringing, the only place to go is the washing check.
-        if (RingState.current(this) != null) {
+        if (RingState.resumeIfInterrupted(this)) {
             startActivity(AlarmRingActivity.intent(this))
         }
     }
